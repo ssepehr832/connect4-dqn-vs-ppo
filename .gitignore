@@ -1,0 +1,19 @@
+proposal.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# IDE / tools
+.qodo/
+
+# Compiled C shared libraries
+*.so
+*.dylib
+*.dll
+
+# Results (plots, logs)
+results/*.pt
