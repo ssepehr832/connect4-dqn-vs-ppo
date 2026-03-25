@@ -54,6 +54,9 @@ class NStepBuffer:
 
     def push(self, env_id, state, action, reward, next_state, done, next_legal):
         """Add a transition for a specific env."""
+        # Grow staging list if needed (e.g. n_envs changed via --n-envs)
+        while env_id >= len(self.staging):
+            self.staging.append(deque(maxlen=self.n_steps))
         self.staging[env_id].append((state, action, reward, next_state, done, next_legal))
 
         if done:

@@ -151,15 +151,15 @@ def progress_line(ep, total, t_start, extra=""):
 
 
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
-                   save_dir="models/dqn", self_play_update=3000):
-    """Train DQN agent against opponent using N_ENVS parallel games."""
-    vec_env = VecConnect4Env(N_ENVS, opponent)
+                   save_dir="models/dqn", self_play_update=3000, n_envs=16):
+    """Train DQN agent against opponent using n_envs parallel games."""
+    vec_env = VecConnect4Env(n_envs, opponent)
     os.makedirs(save_dir, exist_ok=True)
     is_self_play = isinstance(opponent, SelfPlayOpponent)
 
     lr = agent.optimizer.param_groups[0]["lr"]
     print(f"\n{'='*60}")
-    print(f"Training DQN vs {opponent_name} for {episodes} episodes ({N_ENVS} parallel games)")
+    print(f"Training DQN vs {opponent_name} for {episodes} episodes ({n_envs} parallel games)")
     print(f"  lr={lr:.1e} | ε={agent.epsilon:.3f}→{agent.epsilon_end} over {agent.epsilon_decay_steps} steps")
     if is_self_play:
         print(f"  snapshot updates every {self_play_update} episodes")
@@ -180,7 +180,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
         next_states, rewards, dones, next_legals = vec_env.step(actions)
 
         # Store transitions for all envs (routed through n-step buffer)
-        for i in range(N_ENVS):
+        for i in range(n_envs):
             agent.store_transition(
                 states[i], actions[i], rewards[i],
                 next_states[i], dones[i], next_legals[i],
@@ -192,7 +192,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
 
         # Count finished episodes
         n_done = int(dones.sum())
-        for i in range(N_ENVS):
+        for i in range(n_envs):
             if dones[i]:
                 reward_history.append(rewards[i])
         ep_count += n_done
@@ -248,6 +248,7 @@ def main():
     parser.add_argument("--fresh", action="store_true", help="Start from scratch (ignore latest.pt)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--save-dir", type=str, default="models/dqn", help="Directory to save models")
+    parser.add_argument("--n-envs", type=int, default=16, help="Number of parallel games (default: 16)")
     args = parser.parse_args()
 
     # Seed everything
@@ -284,13 +285,14 @@ def main():
         opponents = {
             "random": RandomOpponent(),
             "heuristic": HeuristicOpponent(),
-            "minimax": MinimaxOpponent(depth=4),
+            "minimax": MinimaxOpponent(depth=5),
         }
         opponent = opponents[args.opponent]
 
     train_against(
         agent, opponent, args.opponent,
         episodes=args.episodes, save_dir=args.save_dir,
+        n_envs=args.n_envs,
     )
 
     print("\nTraining complete!")

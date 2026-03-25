@@ -1,6 +1,7 @@
 """Self-play opponent: a frozen snapshot of the learning agent."""
 
 import copy
+import numpy as np
 
 
 class SelfPlayOpponent:
@@ -15,6 +16,20 @@ class SelfPlayOpponent:
 
     def select_action(self, env):
         return self._snapshot.select_action(env, greedy=True)
+
+    def select_actions_batch(self, states, legal_actions_batch):
+        """Batch forward pass through the frozen snapshot.
+
+        Args:
+            states: (N, 6, 7, 2) float32 states from opponent's perspective
+            legal_actions_batch: list of N legal action lists
+
+        Returns:
+            (N,) int array of actions
+        """
+        return self._snapshot.select_actions_batch(
+            states, legal_actions_batch, greedy=True
+        )
 
     def update_snapshot(self, agent):
         """Replace the frozen snapshot with a fresh copy of the agent."""

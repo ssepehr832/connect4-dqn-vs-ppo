@@ -111,9 +111,35 @@ def make_opponent(name, model_path=None):
         print(f"  Loaded PPO model from {path}")
         return lambda env: agent.select_action(env, greedy=True), f"PPO ({os.path.basename(path)})"
 
+    elif name == "dqn-hybrid":
+        from agents.dqn.agent import DQNAgent
+        from agents.hybrid import HybridAgent
+        rl_agent = DQNAgent()
+        path = model_path or _find_model("dqn")
+        if path is None:
+            print("Error: No DQN model found. Train one first.")
+            sys.exit(1)
+        rl_agent.load(path)
+        hybrid = HybridAgent(rl_agent)
+        print(f"  Loaded DQN-Hybrid from {path}")
+        return lambda env: hybrid.select_action(env, greedy=True), f"DQN-Hybrid ({os.path.basename(path)})"
+
+    elif name == "ppo-hybrid":
+        from agents.ppo.agent import PPOAgent
+        from agents.hybrid import HybridAgent
+        rl_agent = PPOAgent()
+        path = model_path or _find_model("ppo")
+        if path is None:
+            print("Error: No PPO model found. Train one first.")
+            sys.exit(1)
+        rl_agent.load(path)
+        hybrid = HybridAgent(rl_agent)
+        print(f"  Loaded PPO-Hybrid from {path}")
+        return lambda env: hybrid.select_action(env, greedy=True), f"PPO-Hybrid ({os.path.basename(path)})"
+
     else:
         print(f"Unknown player type: {name}")
-        print("Choose from: human, random, heuristic, minimax, dqn, ppo")
+        print("Choose from: human, random, heuristic, minimax, dqn, ppo, dqn-hybrid, ppo-hybrid")
         sys.exit(1)
 
 

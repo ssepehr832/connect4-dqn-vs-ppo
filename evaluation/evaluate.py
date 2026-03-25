@@ -38,6 +38,28 @@ def load_agent(agent_type):
             sys.exit(1)
         agent.load(path)
         return agent
+    elif agent_type == "dqn-hybrid":
+        from agents.dqn.agent import DQNAgent
+        from agents.hybrid import HybridAgent
+        rl_agent = DQNAgent()
+        path = "models/dqn/latest.pt"
+        if not os.path.exists(path):
+            print(f"Error: No saved model at {path}. Train first.")
+            sys.exit(1)
+        rl_agent.load(path)
+        rl_agent.epsilon_start = 0.0
+        rl_agent.epsilon_end = 0.0
+        return HybridAgent(rl_agent)
+    elif agent_type == "ppo-hybrid":
+        from agents.ppo.agent import PPOAgent
+        from agents.hybrid import HybridAgent
+        rl_agent = PPOAgent()
+        path = "models/ppo/latest.pt"
+        if not os.path.exists(path):
+            print(f"Error: No saved model at {path}. Train first.")
+            sys.exit(1)
+        rl_agent.load(path)
+        return HybridAgent(rl_agent)
     else:
         print(f"Unknown agent type: {agent_type}")
         sys.exit(1)
@@ -54,31 +76,67 @@ def make_opponent(name, depth=6):
         raise ValueError(f"Unknown opponent: {name}")
 
 
-def evaluate(agent, opponent, games=100):
-    """Play games with alternating first-player. Returns (wins, draws, losses)."""
-    env = Connect4Env()
+def evaluate(agent, opponent, games=100, n_envs=None):
+    """Play games with alternating first-player using parallel envs.
+
+    Returns (wins, draws, losses).
+    """
+    if n_envs is None:
+        n_envs = min(games, 128)
+
+    from envs.vec_connect4 import VecConnect4Env
+    import numpy as np
+
+    vec_env = VecConnect4Env(n_envs, opponent)
     wins, draws, losses = 0, 0, 0
+    ep_count = 0
 
-    for i in range(games):
-        env.reset()
-        # Alternate who goes first
-        agent_player = 1 if i % 2 == 0 else 2
+    states = vec_env.reset_all()
 
-        while not env.done:
-            if env.current_player == agent_player:
-                action = agent.select_action(env, greedy=True)
-            else:
-                action = opponent.select_action(env)
-            env.step(action)
+    while ep_count < games:
+        # Agent selects actions (batched if possible)
+        legal_batch = vec_env.get_legal_actions_batch()
+        actions = np.empty(n_envs, dtype=np.int64)
+        for i in range(n_envs):
+            # Build a proxy env for the agent's select_action
+            proxy = _EvalProxy(
+                vec_env.boards[i], vec_env.agent_player[i], states[i], legal_batch[i]
+            )
+            actions[i] = agent.select_action(proxy, greedy=True)
 
-        if env.winner == agent_player:
-            wins += 1
-        elif env.winner == 0:
-            draws += 1
-        else:
-            losses += 1
+        next_states, rewards, dones, _ = vec_env.step(actions)
+
+        for i in range(n_envs):
+            if dones[i]:
+                ep_count += 1
+                if rewards[i] > 0:
+                    wins += 1
+                elif rewards[i] < 0:
+                    losses += 1
+                else:
+                    draws += 1
+                if ep_count >= games:
+                    break
+
+        states = vec_env.get_states()
 
     return wins, draws, losses
+
+
+class _EvalProxy:
+    """Minimal env proxy for agent.select_action during evaluation."""
+
+    def __init__(self, board, current_player, state, legal_actions):
+        self.board = board
+        self.current_player = current_player
+        self._state = state
+        self._legal = legal_actions
+
+    def get_legal_actions(self):
+        return self._legal
+
+    def get_state(self):
+        return self._state
 
 
 def print_results(agent_name, opp_name, wins, draws, losses, games):
@@ -91,7 +149,8 @@ def print_results(agent_name, opp_name, wins, draws, losses, games):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained agent")
-    parser.add_argument("--agent", required=True, choices=["dqn", "ppo"])
+    parser.add_argument("--agent", required=True,
+                        choices=["dqn", "ppo", "dqn-hybrid", "ppo-hybrid"])
     parser.add_argument("--opponent", default="all",
                         choices=["all", "random", "heuristic", "minimax"])
     parser.add_argument("--games", type=int, default=100,

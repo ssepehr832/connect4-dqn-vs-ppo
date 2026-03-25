@@ -1,7 +1,11 @@
 """Vectorized Connect 4: run N games in parallel with numpy."""
 
+import random as _rand
+
 import numpy as np
 from .connect4 import ROWS, COLS, WIN_LENGTH
+from opponents.minimax_opponent import MinimaxOpponent
+from opponents.self_play_opponent import SelfPlayOpponent
 
 
 class VecConnect4Env:
@@ -15,6 +19,9 @@ class VecConnect4Env:
     def __init__(self, n_envs, opponent):
         self.n_envs = n_envs
         self.opponent = opponent
+        self._batch_minimax = isinstance(opponent, MinimaxOpponent)
+        self._batch_selfplay = isinstance(opponent, SelfPlayOpponent)
+        self._can_batch = self._batch_minimax or self._batch_selfplay
         # boards[i] is a (6,7) int8 array: 0=empty, 1=P1, 2=P2
         self.boards = np.zeros((n_envs, ROWS, COLS), dtype=np.int8)
         # which player the agent controls in each env (1 or 2)
@@ -33,8 +40,14 @@ class VecConnect4Env:
         self.dones[:] = False
 
         # Opponent goes first where agent is P2
-        for i in range(self.n_envs):
-            if self.agent_player[i] == 2:
+        opp_first = [i for i in range(self.n_envs) if self.agent_player[i] == 2]
+        if opp_first and self._can_batch:
+            self.current_player[opp_first] = 1  # P1 goes first
+            actions = self._batch_opponent_actions(opp_first)
+            for j, i in enumerate(opp_first):
+                self._drop(i, int(actions[j]), 1)
+        else:
+            for i in opp_first:
                 self._opponent_move(i)
 
         return self.get_states()
@@ -82,45 +95,92 @@ class VecConnect4Env:
         dones = np.zeros(self.n_envs, dtype=bool)
         next_legals = [[] for _ in range(self.n_envs)]
 
+        # --- Agent moves (all envs) ---
+        needs_opp = []  # indices that need opponent response
         for i in range(self.n_envs):
             col = actions[i]
             ap = self.agent_player[i]
-
-            # --- Agent's move ---
             row = self._drop(i, col, ap)
             if self._check_win(i, row, col):
                 rewards[i] = 1.0
                 dones[i] = True
-                continue
-            if self._is_full(i):
+            elif self._is_full(i):
                 rewards[i] = 0.0
                 dones[i] = True
-                continue
+            else:
+                self.current_player[i] = 3 - ap
+                needs_opp.append(i)
 
-            # --- Opponent's move ---
-            self.current_player[i] = 3 - ap
-            opp_col = self._opponent_move(i)
-            opp_row = self._last_drop_row
-            if self._check_win(i, opp_row, opp_col):
-                rewards[i] = -1.0
-                dones[i] = True
-                continue
-            if self._is_full(i):
-                rewards[i] = 0.0
-                dones[i] = True
-                continue
+        # --- Opponent moves (batch if possible, sequential otherwise) ---
+        if needs_opp:
+            if self._batch_minimax:
+                # Batch get_scores: parallel minimax on all boards
+                boards = np.stack([self.boards[i] for i in needs_opp])
+                players = np.array([self.current_player[i] for i in needs_opp], dtype=np.int8)
+                all_scores, solved_flags = self.opponent.get_scores_batch(boards, players)
 
-            # Still going — record next legal actions
-            self.current_player[i] = ap
-            next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
+                for j, i in enumerate(needs_opp):
+                    scores = all_scores[j]
+                    legal = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
+                    best_score = max(scores[c] for c in legal)
+
+                    if solved_flags[j] and best_score >= 100:
+                        # Opponent has a forced win — end early
+                        rewards[i] = -1.0
+                        dones[i] = True
+                        continue
+
+                    # Pick randomly among best moves (non-deterministic)
+                    best_actions = [c for c in legal if scores[c] == best_score]
+                    col = _rand.choice(best_actions)
+                    row = self._drop(i, col, self.current_player[i])
+                    if self._check_win(i, row, col):
+                        rewards[i] = -1.0
+                        dones[i] = True
+                    elif self._is_full(i):
+                        rewards[i] = 0.0
+                        dones[i] = True
+                    else:
+                        self.current_player[i] = self.agent_player[i]
+                        next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
+            elif self._batch_selfplay:
+                opp_actions = self._batch_opponent_actions(needs_opp)
+                for j, i in enumerate(needs_opp):
+                    col = int(opp_actions[j])
+                    row = self._drop(i, col, self.current_player[i])
+                    if self._check_win(i, row, col):
+                        rewards[i] = -1.0
+                        dones[i] = True
+                    elif self._is_full(i):
+                        rewards[i] = 0.0
+                        dones[i] = True
+                    else:
+                        self.current_player[i] = self.agent_player[i]
+                        next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
 
         # Get next states before resetting
         next_states = self.get_states()
 
         # Auto-reset finished games
-        for i in range(self.n_envs):
-            if dones[i]:
-                self._reset_env(i)
+        reset_indices = [i for i in range(self.n_envs) if dones[i]]
+        opp_first_indices = []
+        for i in reset_indices:
+            self.boards[i] = 0
+            self.agent_player[i] = 3 - self.agent_player[i]
+            self.current_player[i] = 1
+            self.dones[i] = False
+            if self.agent_player[i] == 2:
+                opp_first_indices.append(i)
+
+        # Batch opponent-first moves for reset envs
+        if opp_first_indices:
+            if self._can_batch:
+                actions = self._batch_opponent_actions(opp_first_indices)
+                for j, i in enumerate(opp_first_indices):
+                    self._drop(i, int(actions[j]), 1)
+            else:
+                for i in opp_first_indices:
+                    self._opponent_move(i)
 
         return next_states, rewards, dones, next_legals
 
@@ -136,6 +196,23 @@ class VecConnect4Env:
                 board[row, col] = player
                 return row
         raise ValueError(f"Column {col} is full in env {env_idx}")
+
+    def _batch_opponent_actions(self, indices):
+        """Get opponent actions for all envs in indices via a single batched call."""
+        if self._batch_minimax:
+            boards = np.stack([self.boards[i] for i in indices])
+            players = np.array([self.current_player[i] for i in indices], dtype=np.int8)
+            return self.opponent.select_actions_batch(boards, players)
+        else:
+            # Self-play: build states from opponent's perspective and legal actions
+            states = np.zeros((len(indices), ROWS, COLS, 2), dtype=np.float32)
+            legals = []
+            for j, i in enumerate(indices):
+                opp = self.current_player[i]
+                states[j, :, :, 0] = (self.boards[i] == opp)
+                states[j, :, :, 1] = (self.boards[i] == (3 - opp))
+                legals.append([c for c in range(COLS) if self.boards[i, 0, c] == 0])
+            return self.opponent.select_actions_batch(states, legals)
 
     def _opponent_move(self, env_idx):
         """Let the opponent make a move. Returns the column chosen."""

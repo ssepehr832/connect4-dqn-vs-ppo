@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <string.h>
+#include <pthread.h>
 
 #define ROWS 6
 #define COLS 7
@@ -202,4 +203,138 @@ int minimax_best_action(int *board_flat, int depth, int player) {
 
     if (num_good == 0) return best_actions[0];
     return good_actions[rand() % num_good];
+}
+
+/*
+ * minimax_get_scores: compute minimax score for each column.
+ *
+ * board_flat: row-major int array of size 42
+ * depth:      search depth
+ * player:     current player (1 or 2)
+ * scores:     output array of 7 ints (INT_MIN for illegal columns)
+ *
+ * Returns: 1 if any column has a solved score (|score| >= 100), 0 otherwise
+ */
+int minimax_get_scores(int *board_flat, int depth, int player, int *scores) {
+    int board[ROWS][COLS];
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            board[r][c] = board_flat[r * COLS + c];
+
+    int has_solved = 0;
+    for (int c = 0; c < COLS; c++) {
+        int r = get_drop_row(board, c);
+        if (r < 0) {
+            scores[c] = INT_MIN;
+            continue;
+        }
+        board[r][c] = player;
+        scores[c] = minimax(board, depth - 1, INT_MIN, INT_MAX, 0, player);
+        board[r][c] = 0;
+        if (scores[c] >= 100 || scores[c] <= -100)
+            has_solved = 1;
+    }
+    return has_solved;
+}
+
+/* ---- batch API with pthreads ---- */
+
+typedef struct {
+    int *board_flat;   /* pointer to this board's 42 ints */
+    int depth;
+    int player;
+    int result;        /* output: best column */
+    int *scores;       /* output: 7 scores (NULL if not needed) */
+    int is_solved;     /* output: 1 if position has a forced win/loss */
+} BatchTask;
+
+static void *_batch_worker(void *arg) {
+    BatchTask *task = (BatchTask *)arg;
+    if (task->scores != NULL) {
+        task->is_solved = minimax_get_scores(
+            task->board_flat, task->depth, task->player, task->scores);
+        /* Also compute best action from scores */
+        int best = INT_MIN, best_col = -1;
+        int board[ROWS][COLS];
+        for (int r = 0; r < ROWS; r++)
+            for (int c = 0; c < COLS; c++)
+                board[r][c] = task->board_flat[r * COLS + c];
+        for (int c = 0; c < COLS; c++) {
+            if (board[0][c] != 0) continue;
+            if (task->scores[c] > best) {
+                best = task->scores[c];
+                best_col = c;
+            }
+        }
+        task->result = best_col;
+    } else {
+        task->result = minimax_best_action(task->board_flat, task->depth, task->player);
+        task->is_solved = 0;
+    }
+    return NULL;
+}
+
+/*
+ * boards_flat: N boards concatenated, each 42 ints (row-major)
+ * depths:      array of N depths
+ * players:     array of N players
+ * results:     output array of N best columns
+ * n:           number of boards
+ */
+void minimax_batch(int *boards_flat, int *depths, int *players,
+                   int *results, int n) {
+    pthread_t *threads = (pthread_t *)malloc(n * sizeof(pthread_t));
+    BatchTask *tasks = (BatchTask *)malloc(n * sizeof(BatchTask));
+
+    for (int i = 0; i < n; i++) {
+        tasks[i].board_flat = boards_flat + i * ROWS * COLS;
+        tasks[i].depth = depths[i];
+        tasks[i].player = players[i];
+        tasks[i].result = -1;
+        tasks[i].scores = NULL;
+        tasks[i].is_solved = 0;
+        pthread_create(&threads[i], NULL, _batch_worker, &tasks[i]);
+    }
+
+    for (int i = 0; i < n; i++) {
+        pthread_join(threads[i], NULL);
+        results[i] = tasks[i].result;
+    }
+
+    free(threads);
+    free(tasks);
+}
+
+/*
+ * minimax_batch_scores: like minimax_batch but also returns per-column scores.
+ *
+ * boards_flat:  N boards concatenated, each 42 ints
+ * depths:       array of N depths
+ * players:      array of N players
+ * all_scores:   output array of N*7 ints (scores for each column per board)
+ * solved_flags: output array of N ints (1 if solved, 0 otherwise)
+ * n:            number of boards
+ */
+void minimax_batch_scores(int *boards_flat, int *depths, int *players,
+                          int *all_scores, int *solved_flags, int n) {
+    pthread_t *threads = (pthread_t *)malloc(n * sizeof(pthread_t));
+    BatchTask *tasks = (BatchTask *)malloc(n * sizeof(BatchTask));
+
+    for (int i = 0; i < n; i++) {
+        tasks[i].board_flat = boards_flat + i * ROWS * COLS;
+        tasks[i].depth = depths[i];
+        tasks[i].player = players[i];
+        tasks[i].result = -1;
+        tasks[i].scores = all_scores + i * COLS;
+        tasks[i].is_solved = 0;
+        pthread_create(&threads[i], NULL, _batch_worker, &tasks[i]);
+    }
+
+    for (int i = 0; i < n; i++) {
+        pthread_join(threads[i], NULL);
+        solved_flags[i] = tasks[i].is_solved;
+    }
+
+    free(threads);
+    free(tasks);
 }

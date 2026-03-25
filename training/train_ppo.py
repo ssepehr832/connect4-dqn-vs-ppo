@@ -58,15 +58,15 @@ def progress_line(ep, total, t_start, extra=""):
 
 
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
-                   save_dir="models/ppo", self_play_update=3000):
-    """Train PPO agent against opponent using N_ENVS parallel games."""
-    vec_env = VecConnect4Env(N_ENVS, opponent)
+                   save_dir="models/ppo", self_play_update=3000, n_envs=64):
+    """Train PPO agent against opponent using n_envs parallel games."""
+    vec_env = VecConnect4Env(n_envs, opponent)
     os.makedirs(save_dir, exist_ok=True)
     is_self_play = isinstance(opponent, SelfPlayOpponent)
 
     lr = agent.optimizer.param_groups[0]["lr"]
     print(f"\n{'='*60}")
-    print(f"Training PPO vs {opponent_name} for {episodes} episodes ({N_ENVS} parallel games)")
+    print(f"Training PPO vs {opponent_name} for {episodes} episodes ({n_envs} parallel games)")
     print(f"  lr={lr:.1e} | rollout={agent.rollout_steps} steps | epochs={agent.ppo_epochs} | clip={agent.clip_eps}")
     if is_self_play:
         print(f"  snapshot updates every {self_play_update} episodes")
@@ -92,7 +92,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
             next_states, rewards, dones, next_legals = vec_env.step(actions)
 
             # Store each env's transition
-            for i in range(N_ENVS):
+            for i in range(n_envs):
                 agent.rollout.push(
                     states[i], actions[i], log_probs[i],
                     rewards[i], dones[i], values[i], legal_masks[i],
@@ -100,7 +100,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
 
             # Count finished episodes
             n_done = int(dones.sum())
-            for i in range(N_ENVS):
+            for i in range(n_envs):
                 if dones[i]:
                     reward_history.append(rewards[i])
             ep_count += n_done
@@ -164,6 +164,7 @@ def main():
     parser.add_argument("--fresh", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--save-dir", type=str, default="models/ppo")
+    parser.add_argument("--n-envs", type=int, default=64, help="Number of parallel games (default: 64)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -206,6 +207,7 @@ def main():
     train_against(
         agent, opponent, args.opponent,
         episodes=args.episodes, save_dir=args.save_dir,
+        n_envs=args.n_envs,
     )
 
     print("\nTraining complete!")
