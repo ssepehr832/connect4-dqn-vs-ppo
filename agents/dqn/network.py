@@ -12,19 +12,16 @@ class QNetwork(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(2, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.ReLU(),
+            nn.Conv2d(2, 256, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, padding=1), nn.ReLU(),
         )
         self.fc = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128 * 6 * 7, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
+            nn.Linear(256 * 6 * 7, 1024), nn.ReLU(),
+            nn.Linear(1024, 512), nn.ReLU(),
+            nn.Linear(512, 256), nn.ReLU(),
             nn.Linear(256, 7),
         )
 
@@ -35,5 +32,5 @@ class QNetwork(nn.Module):
         Returns:
             (batch, 7) Q-values for each column
         """
-        h = self.conv(x)
+        h = self.conv(x).flatten(1)
         return self.fc(h)

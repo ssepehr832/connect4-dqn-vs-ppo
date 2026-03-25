@@ -181,12 +181,13 @@ class DQNAgent:
         torch.nn.utils.clip_grad_norm_(self.q_net.parameters(), max_norm=1.0)
         self.optimizer.step()
 
-        # Update target network
+        return loss.item()
+
+    def step_schedule(self):
+        """Advance epsilon decay and target network update. Call once per vec_env step."""
         self.steps_done += 1
         if self.steps_done % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
-
-        return loss.item()
 
     def save(self, path):
         """Save model weights and training state."""

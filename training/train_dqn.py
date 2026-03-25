@@ -151,9 +151,11 @@ def progress_line(ep, total, t_start, extra=""):
 
 
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
-                   save_dir="models/dqn", self_play_update=3000, n_envs=16):
+                   save_dir="models/dqn", self_play_update=3000, n_envs=16,
+                   arbiter=None, arbiter_min_pieces=12):
     """Train DQN agent against opponent using n_envs parallel games."""
-    vec_env = VecConnect4Env(n_envs, opponent)
+    vec_env = VecConnect4Env(n_envs, opponent, arbiter=arbiter,
+                             arbiter_min_pieces=arbiter_min_pieces)
     os.makedirs(save_dir, exist_ok=True)
     is_self_play = isinstance(opponent, SelfPlayOpponent)
 
@@ -163,6 +165,8 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
     print(f"  lr={lr:.1e} | ε={agent.epsilon:.3f}→{agent.epsilon_end} over {agent.epsilon_decay_steps} steps")
     if is_self_play:
         print(f"  snapshot updates every {self_play_update} episodes")
+    if arbiter is not None:
+        print(f"  arbiter: minimax depth {arbiter.depth}, active after {arbiter_min_pieces} pieces")
     print(f"{'='*60}")
 
     reward_history = []
@@ -187,8 +191,14 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
                 env_id=i,
             )
 
-        # Train on a batch from replay buffer
-        agent.update()
+        # Scale gradient updates with n_envs so learning keeps up with data collection
+        # At least 1 update, roughly 1 update per batch_size transitions
+        n_updates = max(1, n_envs // agent.batch_size)
+        for _ in range(n_updates):
+            agent.update()
+
+        # Advance epsilon decay and target network (once per vec_env step, not per update)
+        agent.step_schedule()
 
         # Count finished episodes
         n_done = int(dones.sum())
@@ -249,6 +259,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--save-dir", type=str, default="models/dqn", help="Directory to save models")
     parser.add_argument("--n-envs", type=int, default=16, help="Number of parallel games (default: 16)")
+    parser.add_argument("--arbiter", action="store_true",
+                        help="Use minimax arbiter to end games early when position is solved (useful for self-play)")
+    parser.add_argument("--arbiter-depth", type=int, default=4,
+                        help="Minimax depth for arbiter (default: 4)")
+    parser.add_argument("--arbiter-min-pieces", type=int, default=12,
+                        help="Minimum pieces on board before arbiter checks (default: 12)")
     args = parser.parse_args()
 
     # Seed everything
@@ -256,9 +272,14 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    # Scale replay buffer so it holds at least ~100 steps worth of transitions
+    buffer_cap = max(100_000, args.n_envs * 100)
+
     agent = DQNAgent(
         epsilon_end=args.eps_end,
         epsilon_decay_steps=args.eps_decay,
+        buffer_capacity=buffer_cap,
+        n_envs=args.n_envs,
     )
 
     # Auto-resume from latest.pt unless --fresh
@@ -289,10 +310,16 @@ def main():
         }
         opponent = opponents[args.opponent]
 
+    # Set up minimax arbiter if requested
+    arbiter = None
+    if args.arbiter:
+        arbiter = MinimaxOpponent(depth=args.arbiter_depth)
+
     train_against(
         agent, opponent, args.opponent,
         episodes=args.episodes, save_dir=args.save_dir,
-        n_envs=args.n_envs,
+        n_envs=args.n_envs, arbiter=arbiter,
+        arbiter_min_pieces=args.arbiter_min_pieces,
     )
 
     print("\nTraining complete!")

@@ -16,12 +16,24 @@ class VecConnect4Env:
     Finished games auto-reset.
     """
 
-    def __init__(self, n_envs, opponent):
+    def __init__(self, n_envs, opponent, arbiter=None, arbiter_min_pieces=12):
+        """
+        Args:
+            n_envs: number of parallel games
+            opponent: opponent object
+            arbiter: optional MinimaxOpponent used to end games early when
+                     the position is solved (forced win/loss/draw). Works
+                     with any opponent type (designed for self-play).
+            arbiter_min_pieces: minimum pieces on board before arbiter checks
+                                kick in (default 12 = ~6 moves per player)
+        """
         self.n_envs = n_envs
         self.opponent = opponent
         self._batch_minimax = isinstance(opponent, MinimaxOpponent)
         self._batch_selfplay = isinstance(opponent, SelfPlayOpponent)
         self._can_batch = self._batch_minimax or self._batch_selfplay
+        self.arbiter = arbiter
+        self.arbiter_min_pieces = arbiter_min_pieces
         # boards[i] is a (6,7) int8 array: 0=empty, 1=P1, 2=P2
         self.boards = np.zeros((n_envs, ROWS, COLS), dtype=np.int8)
         # which player the agent controls in each env (1 or 2)
@@ -171,6 +183,35 @@ class VecConnect4Env:
                     else:
                         self.current_player[i] = self.agent_player[i]
                         next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
+
+        # --- Arbiter: use minimax to end games early if position is solved ---
+        if self.arbiter is not None:
+            # Find non-done envs with enough pieces on the board
+            arbiter_candidates = [
+                i for i in range(self.n_envs)
+                if not dones[i] and np.count_nonzero(self.boards[i]) >= self.arbiter_min_pieces
+            ]
+            if arbiter_candidates:
+                arb_boards = np.stack([self.boards[i] for i in arbiter_candidates])
+                # Check from agent's perspective (it's agent's turn now)
+                arb_players = np.array(
+                    [self.agent_player[i] for i in arbiter_candidates], dtype=np.int8
+                )
+                all_scores, solved_flags = self.arbiter.get_scores_batch(arb_boards, arb_players)
+
+                for j, i in enumerate(arbiter_candidates):
+                    if not solved_flags[j]:
+                        continue
+                    legal = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
+                    best_score = max(all_scores[j][c] for c in legal)
+                    if best_score >= 100:
+                        # Agent has a forced win
+                        rewards[i] = 1.0
+                        dones[i] = True
+                    elif best_score <= -100:
+                        # Agent has a forced loss
+                        rewards[i] = -1.0
+                        dones[i] = True
 
         # Get next states before resetting
         next_states = self.get_states()
