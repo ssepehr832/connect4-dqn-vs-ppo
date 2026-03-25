@@ -174,7 +174,32 @@ int minimax_best_action(int *board_flat, int depth, int player) {
         }
     }
 
-    /* Pick randomly among tied best actions */
-    if (num_best <= 1) return best_actions[0];
-    return best_actions[rand() % num_best];
+    /* If the position is solved (forced win/loss within search depth),
+     * play the best move. Otherwise pick randomly among moves that are
+     * within a small margin of the best heuristic score — still smart
+     * but not deterministic. */
+    if (best_score >= 100 || best_score <= -100) {
+        /* Solved position — play optimally */
+        if (num_best <= 1) return best_actions[0];
+        return best_actions[rand() % num_best];
+    }
+
+    /* Unsolved — collect all moves within a margin of the best score */
+    int margin = 3;  /* heuristic score tolerance */
+    int good_actions[COLS];
+    int num_good = 0;
+
+    for (int c = 0; c < COLS; c++) {
+        int r = get_drop_row(board, c);
+        if (r < 0) continue;
+        board[r][c] = player;
+        int score = minimax(board, depth - 1, INT_MIN, INT_MAX, 0, player);
+        board[r][c] = 0;
+        if (score >= best_score - margin) {
+            good_actions[num_good++] = c;
+        }
+    }
+
+    if (num_good == 0) return best_actions[0];
+    return good_actions[rand() % num_good];
 }

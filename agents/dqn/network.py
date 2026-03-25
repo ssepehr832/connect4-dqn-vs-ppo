@@ -12,18 +12,20 @@ class QNetwork(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(2, 64, kernel_size=3, padding=1),
+            nn.Conv2d(2, 128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
             nn.ReLU(),
         )
         self.fc = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 6 * 7, 128),
+            nn.Linear(128 * 6 * 7, 512),
             nn.ReLU(),
-            nn.Linear(128, 7),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 7),
         )
 
     def forward(self, x):

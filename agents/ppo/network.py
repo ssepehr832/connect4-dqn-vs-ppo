@@ -14,27 +14,31 @@ class ActorCriticNetwork(nn.Module):
     def __init__(self):
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(2, 64, kernel_size=3, padding=1),
+            nn.Conv2d(2, 128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
             nn.ReLU(),
         )
         self.flatten = nn.Flatten()
 
         # Policy head
         self.policy = nn.Sequential(
-            nn.Linear(64 * 6 * 7, 128),
+            nn.Linear(128 * 6 * 7, 512),
             nn.ReLU(),
-            nn.Linear(128, 7),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 7),
         )
 
         # Value head
         self.value = nn.Sequential(
-            nn.Linear(64 * 6 * 7, 128),
+            nn.Linear(128 * 6 * 7, 512),
             nn.ReLU(),
-            nn.Linear(128, 1),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
         )
 
     def forward(self, x):

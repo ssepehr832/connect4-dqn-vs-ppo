@@ -284,7 +284,7 @@ def main():
         opponents = {
             "random": RandomOpponent(),
             "heuristic": HeuristicOpponent(),
-            "minimax": MinimaxOpponent(depth=5),
+            "minimax": MinimaxOpponent(depth=4),
         }
         opponent = opponents[args.opponent]
 

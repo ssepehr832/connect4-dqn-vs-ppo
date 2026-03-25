@@ -20,9 +20,12 @@ class HeuristicOpponent:
             if self._would_win(env, col, opp):
                 return col
 
-        # 3. Prefer center columns (3, 2, 4, 1, 5, 0, 6)
-        center_priority = sorted(legal, key=lambda c: abs(c - COLS // 2))
-        return center_priority[0]
+        # 3. Pick randomly among the most central columns
+        # Group by distance from center, pick randomly within the closest group
+        legal_by_dist = sorted(legal, key=lambda c: abs(c - COLS // 2))
+        best_dist = abs(legal_by_dist[0] - COLS // 2)
+        top_picks = [c for c in legal_by_dist if abs(c - COLS // 2) == best_dist]
+        return random.choice(top_picks)
 
     def _would_win(self, env, col, player):
         """Check if dropping a piece in col would win for player."""
