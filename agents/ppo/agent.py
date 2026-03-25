@@ -297,7 +297,7 @@ class PPOAgent:
 
     def load(self, path):
         """Load model weights and training state."""
-        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        ckpt = torch.load(path, map_location=self.device, weights_only=True)
         self.network.load_state_dict(ckpt["network"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
         self.steps_done = ckpt["steps_done"]
