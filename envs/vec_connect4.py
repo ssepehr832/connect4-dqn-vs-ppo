@@ -157,6 +157,20 @@ class VecConnect4Env:
                     else:
                         self.current_player[i] = self.agent_player[i]
                         next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
+            else:
+                # Sequential opponent moves (random, heuristic, etc.)
+                for i in needs_opp:
+                    col = self._opponent_move(i)
+                    row = self._last_drop_row
+                    if self._check_win(i, row, col):
+                        rewards[i] = -1.0
+                        dones[i] = True
+                    elif self._is_full(i):
+                        rewards[i] = 0.0
+                        dones[i] = True
+                    else:
+                        self.current_player[i] = self.agent_player[i]
+                        next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
 
         # Get next states before resetting
         next_states = self.get_states()
