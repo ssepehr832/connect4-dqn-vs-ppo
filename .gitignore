@@ -16,4 +16,5 @@ __pycache__/
 *.dll
 
 # Results (plots, logs)
+results/*.png
 results/*.pt

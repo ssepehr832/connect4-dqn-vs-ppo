@@ -7,6 +7,11 @@ from .connect4 import ROWS, COLS, WIN_LENGTH
 from opponents.minimax_opponent import MinimaxOpponent
 from opponents.self_play_opponent import SelfPlayOpponent
 
+# Reward constants — tweak these to shape agent behavior
+REWARD_WIN = 1.0
+REWARD_DRAW = 0.2
+REWARD_LOSS = -1.1
+
 
 class VecConnect4Env:
     """N independent Connect 4 games running in lockstep.
@@ -114,10 +119,10 @@ class VecConnect4Env:
             ap = self.agent_player[i]
             row = self._drop(i, col, ap)
             if self._check_win(i, row, col):
-                rewards[i] = 1.0
+                rewards[i] = REWARD_WIN
                 dones[i] = True
             elif self._is_full(i):
-                rewards[i] = 0.0
+                rewards[i] = REWARD_DRAW
                 dones[i] = True
             else:
                 self.current_player[i] = 3 - ap
@@ -137,14 +142,14 @@ class VecConnect4Env:
                     best_score = max(scores[c] for c in legal)
 
                     if solved_flags[j]:
-                        if best_score >= 100:
+                        if best_score >= 10000:
                             # Opponent has a forced win — agent loss
-                            rewards[i] = -1.0
+                            rewards[i] = REWARD_LOSS
                             dones[i] = True
                             continue
-                        if best_score <= -100:
+                        if best_score <= -10000:
                             # Opponent has a forced loss — agent win
-                            rewards[i] = 1.0
+                            rewards[i] = REWARD_WIN
                             dones[i] = True
                             continue
 
@@ -153,10 +158,10 @@ class VecConnect4Env:
                     col = _rand.choice(best_actions)
                     row = self._drop(i, col, self.current_player[i])
                     if self._check_win(i, row, col):
-                        rewards[i] = -1.0
+                        rewards[i] = REWARD_LOSS
                         dones[i] = True
                     elif self._is_full(i):
-                        rewards[i] = 0.0
+                        rewards[i] = REWARD_DRAW
                         dones[i] = True
                     else:
                         self.current_player[i] = self.agent_player[i]
@@ -167,10 +172,10 @@ class VecConnect4Env:
                     col = int(opp_actions[j])
                     row = self._drop(i, col, self.current_player[i])
                     if self._check_win(i, row, col):
-                        rewards[i] = -1.0
+                        rewards[i] = REWARD_LOSS
                         dones[i] = True
                     elif self._is_full(i):
-                        rewards[i] = 0.0
+                        rewards[i] = REWARD_DRAW
                         dones[i] = True
                     else:
                         self.current_player[i] = self.agent_player[i]
@@ -181,10 +186,10 @@ class VecConnect4Env:
                     col = self._opponent_move(i)
                     row = self._last_drop_row
                     if self._check_win(i, row, col):
-                        rewards[i] = -1.0
+                        rewards[i] = REWARD_LOSS
                         dones[i] = True
                     elif self._is_full(i):
-                        rewards[i] = 0.0
+                        rewards[i] = REWARD_DRAW
                         dones[i] = True
                     else:
                         self.current_player[i] = self.agent_player[i]
@@ -211,13 +216,13 @@ class VecConnect4Env:
                         continue
                     legal = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
                     best_score = max(all_scores[j][c] for c in legal)
-                    if best_score >= 100:
+                    if best_score >= 10000:
                         # Agent has a forced win
-                        rewards[i] = 1.0
+                        rewards[i] = REWARD_WIN
                         dones[i] = True
-                    elif best_score <= -100:
+                    elif best_score <= -10000:
                         # Agent has a forced loss
-                        rewards[i] = -1.0
+                        rewards[i] = REWARD_LOSS
                         dones[i] = True
 
         # Get next states before resetting

@@ -54,7 +54,7 @@ static int check_winner(const int board[ROWS][COLS]) {
 /* ---- heuristic evaluation ---- */
 
 static int score_window(int me_count, int opp_count, int empty_count) {
-    if (me_count == 4) return 100;
+    if (me_count == 4) return 10000;
     if (me_count == 3 && empty_count == 1) return 5;
     if (me_count == 2 && empty_count == 2) return 2;
     if (opp_count == 3 && empty_count == 1) return -4;
@@ -104,8 +104,8 @@ static int minimax(int board[ROWS][COLS], int depth, int alpha, int beta,
     int opp = 3 - me;
 
     int winner = check_winner(board);
-    if (winner == me)  return  100 + depth;
-    if (winner == opp) return -100 - depth;
+    if (winner == me)  return  10000 + depth;
+    if (winner == opp) return -10000 - depth;
     if (is_full(board)) return 0;
     if (depth == 0) return evaluate(board, me);
 
@@ -179,7 +179,7 @@ int minimax_best_action(int *board_flat, int depth, int player) {
      * play the best move. Otherwise pick randomly among moves that are
      * within a small margin of the best heuristic score — still smart
      * but not deterministic. */
-    if (best_score >= 100 || best_score <= -100) {
+    if (best_score >= 10000 || best_score <= -10000) {
         /* Solved position — play optimally */
         if (num_best <= 1) return best_actions[0];
         return best_actions[rand() % num_best];
@@ -213,7 +213,7 @@ int minimax_best_action(int *board_flat, int depth, int player) {
  * player:     current player (1 or 2)
  * scores:     output array of 7 ints (INT_MIN for illegal columns)
  *
- * Returns: 1 if any column has a solved score (|score| >= 100), 0 otherwise
+ * Returns: 1 if any column has a solved score (|score| >= 10000), 0 otherwise
  */
 int minimax_get_scores(int *board_flat, int depth, int player, int *scores) {
     int board[ROWS][COLS];
@@ -231,7 +231,7 @@ int minimax_get_scores(int *board_flat, int depth, int player, int *scores) {
         board[r][c] = player;
         scores[c] = minimax(board, depth - 1, INT_MIN, INT_MAX, 0, player);
         board[r][c] = 0;
-        if (scores[c] >= 100 || scores[c] <= -100)
+        if (scores[c] >= 10000 || scores[c] <= -10000)
             has_solved = 1;
     }
     return has_solved;
