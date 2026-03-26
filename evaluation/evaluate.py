@@ -65,13 +65,40 @@ def load_agent(agent_type):
         sys.exit(1)
 
 
-def make_opponent(name, depth=6):
+class EvalSelfPlayOpponent:
+    """Self-play opponent for evaluation: plays near-greedy with small epsilon."""
+
+    def __init__(self, agent, epsilon=0.05):
+        # Load a fresh copy instead of deepcopy to avoid ctypes pickle issues
+        from agents.hybrid import HybridAgent
+        if isinstance(agent, HybridAgent):
+            # For hybrid, just copy the RL agent and wrap fresh
+            import copy
+            rl_copy = copy.deepcopy(agent.rl_agent)
+            self._agent = HybridAgent(rl_copy, minimax_depth=agent.minimax.depth)
+        else:
+            import copy
+            self._agent = copy.deepcopy(agent)
+        self._epsilon = epsilon
+
+    def select_action(self, env):
+        import random as _rand
+        if _rand.random() < self._epsilon:
+            return _rand.choice(env.get_legal_actions())
+        return self._agent.select_action(env, greedy=True)
+
+
+def make_opponent(name, depth=6, agent=None):
     if name == "random":
         return RandomOpponent()
     elif name == "heuristic":
         return HeuristicOpponent()
     elif name == "minimax":
         return MinimaxOpponent(depth=depth)
+    elif name == "self":
+        if agent is None:
+            raise ValueError("Self-play requires an agent to copy")
+        return EvalSelfPlayOpponent(agent, epsilon=0.05)
     else:
         raise ValueError(f"Unknown opponent: {name}")
 
@@ -152,7 +179,7 @@ def main():
     parser.add_argument("--agent", required=True,
                         choices=["dqn", "ppo", "dqn-hybrid", "ppo-hybrid"])
     parser.add_argument("--opponent", default="all",
-                        choices=["all", "random", "heuristic", "minimax"])
+                        choices=["all", "random", "heuristic", "minimax", "self"])
     parser.add_argument("--games", type=int, default=100,
                         help="Games per opponent (default: 100)")
     parser.add_argument("--depth", type=int, default=4,
@@ -162,7 +189,7 @@ def main():
     agent = load_agent(args.agent)
 
     if args.opponent == "all":
-        opponents = ["random", "heuristic", "minimax"]
+        opponents = ["random", "heuristic", "minimax", "self"]
     else:
         opponents = [args.opponent]
 
@@ -171,7 +198,7 @@ def main():
     print(f"{'='*60}")
 
     for opp_name in opponents:
-        opp = make_opponent(opp_name, depth=args.depth)
+        opp = make_opponent(opp_name, depth=args.depth, agent=agent)
         w, d, l = evaluate(agent, opp, args.games)
         print_results(args.agent.upper(), opp_name, w, d, l, args.games)
 

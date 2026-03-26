@@ -82,6 +82,11 @@ class NStepBuffer:
         # Remove only the oldest — slide the window forward
         buf.popleft()
 
+    def flush_all(self):
+        """Flush all staging buffers (e.g. on chunk switch). Discards partial trajectories."""
+        for env_id in range(len(self.staging)):
+            self.staging[env_id].clear()
+
     def _flush(self, env_id):
         """On terminal: push all remaining transitions with shortened n-step returns."""
         buf = self.staging[env_id]

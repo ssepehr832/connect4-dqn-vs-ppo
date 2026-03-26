@@ -150,6 +150,102 @@ def progress_line(ep, total, t_start, extra=""):
     return line
 
 
+def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
+                     save_dir="models/dqn", self_play_update=3000, n_envs=16,
+                     chunk_size=1000, arbiter=None, arbiter_min_pieces=12):
+    """Alternate between self-play and minimax in chunks."""
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Two vec_envs: one for self-play (with arbiter), one for minimax (no arbiter needed)
+    vec_self = VecConnect4Env(n_envs, self_opp, arbiter=arbiter,
+                               arbiter_min_pieces=arbiter_min_pieces)
+    vec_minimax = VecConnect4Env(n_envs, minimax_opp)
+
+    lr = agent.optimizer.param_groups[0]["lr"]
+    print(f"\n{'='*60}")
+    print(f"Training DQN vs self-mixed for {episodes} episodes ({n_envs} parallel games)")
+    print(f"  lr={lr:.1e} | ε={agent.epsilon:.3f}→{agent.epsilon_end} over {agent.epsilon_decay_steps} steps")
+    print(f"  snapshot updates every {self_play_update} eps | chunks of {chunk_size} eps")
+    if arbiter is not None:
+        print(f"  arbiter: minimax depth {arbiter.depth}, active after {arbiter_min_pieces} pieces")
+    print(f"{'='*60}")
+
+    reward_history = []
+    t_start = time.time()
+    last_print = 0.0
+    last_checkpoint = 0
+    ep_count = 0
+    chunk_ep = 0  # episodes within current chunk
+    use_self = True  # start with self-play
+
+    vec_env = vec_self
+    states = vec_env.reset_all()
+
+    while ep_count < episodes:
+        legal_batch = vec_env.get_legal_actions_batch()
+        actions = agent.select_actions_batch(states, legal_batch)
+        next_states, rewards, dones, next_legals = vec_env.step(actions)
+
+        for i in range(n_envs):
+            agent.store_transition(
+                states[i], actions[i], rewards[i],
+                next_states[i], dones[i], next_legals[i],
+                env_id=i,
+            )
+
+        n_updates = max(1, n_envs // agent.batch_size)
+        for _ in range(n_updates):
+            agent.update()
+        agent.step_schedule()
+
+        n_done = int(dones.sum())
+        for i in range(n_envs):
+            if dones[i]:
+                reward_history.append(rewards[i])
+        ep_count += n_done
+        chunk_ep += n_done
+
+        # Self-play snapshot update (only during self-play chunks)
+        if use_self and n_done > 0 and ep_count % self_play_update < n_done:
+            self_opp.update_snapshot(agent)
+            vec_self.opponent = self_opp
+
+        # Switch chunks
+        if chunk_ep >= chunk_size:
+            chunk_ep = 0
+            use_self = not use_self
+            vec_env = vec_self if use_self else vec_minimax
+            # Flush n-step buffers to avoid mixing trajectories across chunk switches
+            agent.flush_n_step_buffers()
+            states = vec_env.reset_all()
+        else:
+            states = vec_env.get_states()
+
+        # Throttled progress bar
+        now = time.time()
+        if now - last_print >= 0.5 or ep_count >= episodes:
+            recent = reward_history[-500:] if reward_history else []
+            win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0
+            mode = "self" if use_self else "minimax"
+            sys.stdout.write(progress_line(
+                min(ep_count, episodes), episodes, t_start,
+                extra=f"ε={agent.epsilon:.3f} | win={win_rate:.0%} | {mode}"
+            ))
+            sys.stdout.flush()
+            last_print = now
+
+        if ep_count - last_checkpoint >= save_every:
+            agent.save(os.path.join(save_dir, "latest.pt"))
+            last_checkpoint = ep_count
+
+        if ep_count >= episodes:
+            break
+
+    print()
+    agent.save(os.path.join(save_dir, "latest.pt"))
+    return agent
+
+
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
                    save_dir="models/dqn", self_play_update=3000, n_envs=16,
                    arbiter=None, arbiter_min_pieces=12):
@@ -247,7 +343,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train DQN agent for Connect 4")
     parser.add_argument(
         "--opponent", type=str, default="random",
-        choices=["random", "heuristic", "minimax", "self"],
+        choices=["random", "heuristic", "minimax", "self", "self-mixed"],
         help="Opponent to train against (default: random)",
     )
     parser.add_argument("--episodes", type=int, default=10_000, help="Number of episodes")
@@ -300,27 +396,43 @@ def main():
         for param_group in agent.optimizer.param_groups:
             param_group["lr"] = args.lr
 
-    if args.opponent == "self":
-        opponent = SelfPlayOpponent(agent)
+    if args.opponent == "self-mixed":
+        # Alternating self-play + minimax training
+        self_opp = SelfPlayOpponent(agent)
+        minimax_opp = MinimaxOpponent(depth=5)
+
+        # Arbiter for self-play portions (reuse minimax_opp to avoid extra instance)
+        arbiter = MinimaxOpponent(depth=args.arbiter_depth) if args.arbiter else None
+
+        train_self_mixed(
+            agent, self_opp, minimax_opp,
+            episodes=args.episodes, save_dir=args.save_dir,
+            n_envs=args.n_envs, self_play_update=3000,
+            chunk_size=1000, arbiter=arbiter,
+            arbiter_min_pieces=args.arbiter_min_pieces,
+        )
     else:
-        opponents = {
-            "random": RandomOpponent(),
-            "heuristic": HeuristicOpponent(),
-            "minimax": MinimaxOpponent(depth=5),
-        }
-        opponent = opponents[args.opponent]
+        if args.opponent == "self":
+            opponent = SelfPlayOpponent(agent)
+        else:
+            opponents = {
+                "random": RandomOpponent(),
+                "heuristic": HeuristicOpponent(),
+                "minimax": MinimaxOpponent(depth=5),
+            }
+            opponent = opponents[args.opponent]
 
-    # Set up minimax arbiter if requested
-    arbiter = None
-    if args.arbiter:
-        arbiter = MinimaxOpponent(depth=args.arbiter_depth)
+        # Set up minimax arbiter if requested
+        arbiter = None
+        if args.arbiter:
+            arbiter = MinimaxOpponent(depth=args.arbiter_depth)
 
-    train_against(
-        agent, opponent, args.opponent,
-        episodes=args.episodes, save_dir=args.save_dir,
-        n_envs=args.n_envs, arbiter=arbiter,
-        arbiter_min_pieces=args.arbiter_min_pieces,
-    )
+        train_against(
+            agent, opponent, args.opponent,
+            episodes=args.episodes, save_dir=args.save_dir,
+            n_envs=args.n_envs, arbiter=arbiter,
+            arbiter_min_pieces=args.arbiter_min_pieces,
+        )
 
     print("\nTraining complete!")
 

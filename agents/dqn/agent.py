@@ -133,6 +133,10 @@ class DQNAgent:
         """Store a transition via the n-step buffer."""
         self.n_step_buffer.push(env_id, state, action, reward, next_state, done, next_legal)
 
+    def flush_n_step_buffers(self):
+        """Discard partial n-step trajectories (e.g. on chunk switch)."""
+        self.n_step_buffer.flush_all()
+
     def update(self):
         """Sample a batch and perform one gradient step.
 

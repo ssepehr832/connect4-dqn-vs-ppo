@@ -136,11 +136,17 @@ class VecConnect4Env:
                     legal = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
                     best_score = max(scores[c] for c in legal)
 
-                    if solved_flags[j] and best_score >= 100:
-                        # Opponent has a forced win — end early
-                        rewards[i] = -1.0
-                        dones[i] = True
-                        continue
+                    if solved_flags[j]:
+                        if best_score >= 100:
+                            # Opponent has a forced win — agent loss
+                            rewards[i] = -1.0
+                            dones[i] = True
+                            continue
+                        if best_score <= -100:
+                            # Opponent has a forced loss — agent win
+                            rewards[i] = 1.0
+                            dones[i] = True
+                            continue
 
                     # Pick randomly among best moves (non-deterministic)
                     best_actions = [c for c in legal if scores[c] == best_score]
@@ -185,7 +191,8 @@ class VecConnect4Env:
                         next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
 
         # --- Arbiter: use minimax to end games early if position is solved ---
-        if self.arbiter is not None:
+        # Skip when opponent is minimax (already handled both-ways above)
+        if self.arbiter is not None and not self._batch_minimax:
             # Find non-done envs with enough pieces on the board
             arbiter_candidates = [
                 i for i in range(self.n_envs)
