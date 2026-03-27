@@ -49,6 +49,7 @@ class DQNAgent:
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.target_net.eval()
 
+        self.freeze_conv = False
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
         self.loss_fn = nn.SmoothL1Loss()  # Huber loss
 
@@ -57,6 +58,16 @@ class DQNAgent:
         self.n_step_buffer = NStepBuffer(n_envs, n_steps, gamma, self.replay_buffer)
 
         self.steps_done = 0
+
+    def set_freeze_conv(self, freeze):
+        """Freeze or unfreeze conv layers and rebuild optimizer."""
+        self.freeze_conv = freeze
+        for param in self.q_net.conv.parameters():
+            param.requires_grad = not freeze
+        # Rebuild optimizer with only trainable params
+        lr = self.optimizer.param_groups[0]["lr"]
+        trainable = [p for p in self.q_net.parameters() if p.requires_grad]
+        self.optimizer = optim.Adam(trainable, lr=lr)
 
     @property
     def epsilon(self):
@@ -69,16 +80,18 @@ class DQNAgent:
         t = torch.from_numpy(state).float().permute(2, 0, 1).unsqueeze(0)
         return t.to(self.device)
 
-    def select_action(self, env, greedy=False):
+    def select_action(self, env, greedy=False, allowed_actions=None):
         """Epsilon-greedy action selection with illegal action masking.
 
         Args:
-            env:    Connect4Env instance
-            greedy: if True, always pick best action (no exploration)
+            env:             Connect4Env instance
+            greedy:          if True, always pick best action (no exploration)
+            allowed_actions: optional subset of legal actions to choose from
+                             (used by hybrid agent to filter out losing moves)
         Returns:
             action (int): column index
         """
-        legal = env.get_legal_actions()
+        legal = allowed_actions if allowed_actions is not None else env.get_legal_actions()
 
         if not greedy and random.random() < self.epsilon:
             return random.choice(legal)
@@ -87,7 +100,7 @@ class DQNAgent:
         with torch.no_grad():
             q_values = self.q_net(self._state_to_tensor(state)).squeeze(0)
 
-        # Mask illegal actions
+        # Mask actions not in the allowed set
         mask = torch.full((7,), float("-inf"), device=self.device)
         for a in legal:
             mask[a] = 0.0
@@ -210,5 +223,9 @@ class DQNAgent:
         ckpt = torch.load(path, map_location=self.device, weights_only=True)
         self.q_net.load_state_dict(ckpt["q_net"])
         self.target_net.load_state_dict(ckpt["target_net"])
-        self.optimizer.load_state_dict(ckpt["optimizer"])
         self.steps_done = ckpt["steps_done"]
+        # Only load optimizer state if param groups match (skip if conv is frozen)
+        try:
+            self.optimizer.load_state_dict(ckpt["optimizer"])
+        except (ValueError, KeyError):
+            pass  # optimizer shape mismatch (e.g. freeze_conv changed param count)

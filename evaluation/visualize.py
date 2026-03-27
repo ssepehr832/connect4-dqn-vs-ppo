@@ -31,6 +31,8 @@ def load_agent(agent_type):
         agent.load(path)
         agent.epsilon_start = 0.0
         agent.epsilon_end = 0.0
+        agent.epsilon_start = 0.0
+        agent.epsilon_end = 0.0
         return agent
     elif agent_type == "ppo":
         from agents.ppo.agent import PPOAgent
@@ -128,12 +130,17 @@ def collect_game_data(agent, opponent, games=100):
             board_snap = env.board.copy()
             record['boards_at_agent_moves'].append(board_snap)
 
-            # Get Q-values for visualization
+            # Get Q-values for visualization (masked to legal actions only)
             if dqn_inner is not None:
                 state = env.get_state()
+                legal = env.get_legal_actions()
                 with torch.no_grad():
                     state_t = torch.from_numpy(state).float().permute(2, 0, 1).unsqueeze(0).to(dqn_inner.device)
                     q_vals = dqn_inner.q_net(state_t).squeeze(0).cpu().numpy()
+                # Mask illegal actions so they don't show up in plots
+                for c in range(COLS):
+                    if c not in legal:
+                        q_vals[c] = float('-inf')
                 record['q_values_at_agent_moves'].append(q_vals)
 
             col = agent.select_action(env, greedy=True)

@@ -9,8 +9,18 @@ from opponents.self_play_opponent import SelfPlayOpponent
 
 # Reward constants — tweak these to shape agent behavior
 REWARD_WIN = 1.0
+REWARD_WIN_BONUS = 0.3  # max bonus for fast wins (linearly scaled)
 REWARD_DRAW = 0.2
 REWARD_LOSS = -1.1
+
+
+def win_reward(board):
+    """Win reward with bonus for faster wins. Range: REWARD_WIN to REWARD_WIN + REWARD_WIN_BONUS."""
+    pieces = int(np.count_nonzero(board))
+    # pieces ranges from 7 (earliest win) to 41 (latest win)
+    # bonus = REWARD_WIN_BONUS * (1 - (pieces - 7) / (41 - 7))
+    speed = max(0.0, 1.0 - (pieces - 7) / 34.0)
+    return REWARD_WIN + REWARD_WIN_BONUS * speed
 
 
 class VecConnect4Env:
@@ -45,6 +55,9 @@ class VecConnect4Env:
         self.agent_player = np.ones(n_envs, dtype=np.int8)
         self.current_player = np.ones(n_envs, dtype=np.int8)
         self.dones = np.zeros(n_envs, dtype=bool)
+        # Move tracking for game uniqueness detection
+        self._move_seqs = [[] for _ in range(n_envs)]
+        self._finished_hashes = []  # hashes of completed games since last drain
 
     def reset_all(self):
         """Reset all envs, randomize sides, let opponent go first if needed."""
@@ -55,6 +68,8 @@ class VecConnect4Env:
         )
         self.current_player[:] = 1
         self.dones[:] = False
+        self._move_seqs = [[] for _ in range(self.n_envs)]
+        self._finished_hashes = []
 
         # Opponent goes first where agent is P2
         opp_first = [i for i in range(self.n_envs) if self.agent_player[i] == 2]
@@ -62,10 +77,13 @@ class VecConnect4Env:
             self.current_player[opp_first] = 1  # P1 goes first
             actions = self._batch_opponent_actions(opp_first)
             for j, i in enumerate(opp_first):
-                self._drop(i, int(actions[j]), 1)
+                col = int(actions[j])
+                self._drop(i, col, 1)
+                self._move_seqs[i].append(col)
         else:
             for i in opp_first:
-                self._opponent_move(i)
+                col = self._opponent_move(i)
+                self._move_seqs[i].append(col)
 
         return self.get_states()
 
@@ -116,10 +134,11 @@ class VecConnect4Env:
         needs_opp = []  # indices that need opponent response
         for i in range(self.n_envs):
             col = actions[i]
+            self._move_seqs[i].append(int(col))
             ap = self.agent_player[i]
             row = self._drop(i, col, ap)
             if self._check_win(i, row, col):
-                rewards[i] = REWARD_WIN
+                rewards[i] = win_reward(self.boards[i])
                 dones[i] = True
             elif self._is_full(i):
                 rewards[i] = REWARD_DRAW
@@ -149,13 +168,14 @@ class VecConnect4Env:
                             continue
                         if best_score <= -10000:
                             # Opponent has a forced loss — agent win
-                            rewards[i] = REWARD_WIN
+                            rewards[i] = win_reward(self.boards[i])
                             dones[i] = True
                             continue
 
                     # Pick randomly among best moves (non-deterministic)
                     best_actions = [c for c in legal if scores[c] == best_score]
                     col = _rand.choice(best_actions)
+                    self._move_seqs[i].append(col)
                     row = self._drop(i, col, self.current_player[i])
                     if self._check_win(i, row, col):
                         rewards[i] = REWARD_LOSS
@@ -170,6 +190,7 @@ class VecConnect4Env:
                 opp_actions = self._batch_opponent_actions(needs_opp)
                 for j, i in enumerate(needs_opp):
                     col = int(opp_actions[j])
+                    self._move_seqs[i].append(col)
                     row = self._drop(i, col, self.current_player[i])
                     if self._check_win(i, row, col):
                         rewards[i] = REWARD_LOSS
@@ -184,6 +205,7 @@ class VecConnect4Env:
                 # Sequential opponent moves (random, heuristic, etc.)
                 for i in needs_opp:
                     col = self._opponent_move(i)
+                    self._move_seqs[i].append(col)
                     row = self._last_drop_row
                     if self._check_win(i, row, col):
                         rewards[i] = REWARD_LOSS
@@ -218,7 +240,7 @@ class VecConnect4Env:
                     best_score = max(all_scores[j][c] for c in legal)
                     if best_score >= 10000:
                         # Agent has a forced win
-                        rewards[i] = REWARD_WIN
+                        rewards[i] = win_reward(self.boards[i])
                         dones[i] = True
                     elif best_score <= -10000:
                         # Agent has a forced loss
@@ -232,6 +254,9 @@ class VecConnect4Env:
         reset_indices = [i for i in range(self.n_envs) if dones[i]]
         opp_first_indices = []
         for i in reset_indices:
+            # Hash finished game for uniqueness tracking
+            self._finished_hashes.append(hash(tuple(self._move_seqs[i])))
+            self._move_seqs[i] = []
             self.boards[i] = 0
             self.agent_player[i] = 3 - self.agent_player[i]
             self.current_player[i] = 1
@@ -244,12 +269,21 @@ class VecConnect4Env:
             if self._can_batch:
                 actions = self._batch_opponent_actions(opp_first_indices)
                 for j, i in enumerate(opp_first_indices):
-                    self._drop(i, int(actions[j]), 1)
+                    col = int(actions[j])
+                    self._drop(i, col, 1)
+                    self._move_seqs[i].append(col)
             else:
                 for i in opp_first_indices:
-                    self._opponent_move(i)
+                    col = self._opponent_move(i)
+                    self._move_seqs[i].append(col)
 
         return next_states, rewards, dones, next_legals
+
+    def drain_game_hashes(self):
+        """Return and clear the list of finished game hashes since last call."""
+        hashes = self._finished_hashes
+        self._finished_hashes = []
+        return hashes
 
     # ---- internal helpers ----
 

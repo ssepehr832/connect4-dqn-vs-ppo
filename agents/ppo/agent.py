@@ -96,16 +96,18 @@ class PPOAgent:
             mask[a] = True
         return mask
 
-    def select_action(self, env, greedy=False):
+    def select_action(self, env, greedy=False, allowed_actions=None):
         """Select action using the policy.
 
         Args:
-            env:    Connect4Env instance
-            greedy: if True, pick the highest-probability legal action
+            env:             Connect4Env instance
+            greedy:          if True, pick the highest-probability legal action
+            allowed_actions: optional subset of legal actions to choose from
+                             (used by hybrid agent to filter out losing moves)
         Returns:
             action (int): column index
         """
-        legal = env.get_legal_actions()
+        legal = allowed_actions if allowed_actions is not None else env.get_legal_actions()
         state = env.get_state()
 
         with torch.no_grad():

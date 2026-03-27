@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import os
+import shutil
 import sys
 import time
 import random
@@ -141,13 +142,19 @@ def progress_line(ep, total, t_start, extra=""):
     bar = "█" * filled + "░" * (bar_len - filled)
 
     line = (
-        f"\r  {bar} {ep}/{total} ({pct:.0%}) | "
+        f"  {bar} {ep}/{total} ({pct:.0%}) | "
         f"{eps_per_sec:.1f} ep/s | "
         f"{fmt_time(elapsed)}<{fmt_time(remaining)}"
     )
     if extra:
         line += f" | {extra}"
-    return line
+
+    # Truncate to terminal width so \r overwrites cleanly
+    cols = shutil.get_terminal_size().columns
+    if len(line) > cols - 1:
+        line = line[:cols - 1]
+    # Pad with spaces to clear previous longer lines, then \r
+    return f"\r{line}" + " " * max(0, cols - 1 - len(line))
 
 
 def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
@@ -171,6 +178,8 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
     print(f"{'='*60}")
 
     reward_history = []
+    unique_games = set()
+    total_games = 0
     t_start = time.time()
     last_print = 0.0
     last_checkpoint = 0
@@ -202,6 +211,9 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
         for i in range(n_envs):
             if dones[i]:
                 reward_history.append(rewards[i])
+        for h in vec_env.drain_game_hashes():
+            unique_games.add(h)
+            total_games += 1
         ep_count += n_done
         chunk_ep += n_done
 
@@ -226,10 +238,11 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
         if now - last_print >= 0.5 or ep_count >= episodes:
             recent = reward_history[-500:] if reward_history else []
             win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0
+            uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
             mode = "self" if use_self else "minimax"
             sys.stdout.write(progress_line(
                 min(ep_count, episodes), episodes, t_start,
-                extra=f"ε={agent.epsilon:.3f} | win={win_rate:.0%} | {mode}"
+                extra=f"ε={agent.epsilon:.3f} | win={win_rate:.0%} | uniq={uniq_pct:.0%} | {mode}"
             ))
             sys.stdout.flush()
             last_print = now
@@ -266,6 +279,8 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
     print(f"{'='*60}")
 
     reward_history = []
+    unique_games = set()
+    total_games = 0
     t_start = time.time()
     last_print = 0.0
     last_checkpoint = 0
@@ -296,11 +311,14 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
         # Advance epsilon decay and target network (once per vec_env step, not per update)
         agent.step_schedule()
 
-        # Count finished episodes
+        # Count finished episodes and track uniqueness
         n_done = int(dones.sum())
         for i in range(n_envs):
             if dones[i]:
                 reward_history.append(rewards[i])
+        for h in vec_env.drain_game_hashes():
+            unique_games.add(h)
+            total_games += 1
         ep_count += n_done
 
         # Self-play snapshot update
@@ -317,10 +335,11 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
             # Rolling win rate from last 500 episodes
             recent = reward_history[-500:] if reward_history else []
             win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0
+            uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
 
             sys.stdout.write(progress_line(
                 min(ep_count, episodes), episodes, t_start,
-                extra=f"ε={agent.epsilon:.3f} | win={win_rate:.0%}"
+                extra=f"ε={agent.epsilon:.3f} | win={win_rate:.0%} | uniq={uniq_pct:.0%}"
             ))
             sys.stdout.flush()
             last_print = now
@@ -361,6 +380,8 @@ def main():
                         help="Minimax depth for arbiter (default: 4)")
     parser.add_argument("--arbiter-min-pieces", type=int, default=12,
                         help="Minimum pieces on board before arbiter checks (default: 12)")
+    parser.add_argument("--freeze-conv", action="store_true",
+                        help="Freeze conv layers, only train FC head (for pretrained models)")
     args = parser.parse_args()
 
     # Seed everything
@@ -377,6 +398,13 @@ def main():
         buffer_capacity=buffer_cap,
         n_envs=args.n_envs,
     )
+
+    # Freeze conv layers if requested (before load so optimizer shape matches)
+    if args.freeze_conv:
+        agent.set_freeze_conv(True)
+        n_frozen = sum(p.numel() for p in agent.q_net.conv.parameters())
+        n_trainable = sum(p.numel() for p in agent.q_net.parameters() if p.requires_grad)
+        print(f"Conv frozen: {n_frozen:,} params frozen, {n_trainable:,} trainable")
 
     # Auto-resume from latest.pt unless --fresh
     latest_path = os.path.join(args.save_dir, "latest.pt")

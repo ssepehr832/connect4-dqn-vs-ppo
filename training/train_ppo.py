@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import os
+import shutil
 import sys
 import time
 import random
@@ -48,13 +49,18 @@ def progress_line(ep, total, t_start, extra=""):
     bar = "█" * filled + "░" * (bar_len - filled)
 
     line = (
-        f"\r  {bar} {ep}/{total} ({pct:.0%}) | "
+        f"  {bar} {ep}/{total} ({pct:.0%}) | "
         f"{eps_per_sec:.1f} ep/s | "
         f"{fmt_time(elapsed)}<{fmt_time(remaining)}"
     )
     if extra:
         line += f" | {extra}"
-    return line
+
+    # Truncate to terminal width so \r overwrites cleanly
+    cols = shutil.get_terminal_size().columns
+    if len(line) > cols - 1:
+        line = line[:cols - 1]
+    return f"\r{line}" + " " * max(0, cols - 1 - len(line))
 
 
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
