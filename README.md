@@ -13,7 +13,8 @@ To prevent agents from overfitting to a single opponent strategy, we train again
 | **Random** | Uniform random legal moves — baseline for initial learning |
 | **Heuristic** | Rule-based: wins if possible, blocks opponent wins, prefers center (non-deterministic among equally good moves) |
 | **Minimax** | Alpha-beta search (C-accelerated with pthreads, depth 5) — plays optimally in solved positions, randomly among top moves otherwise |
-| **Self-play** | Frozen snapshot of the agent itself, updated periodically during training |
+| **Self-play** | Frozen snapshot of the agent itself, updated every 3000 episodes during training |
+| **Self-mixed** | Alternates between self-play and minimax in chunks of 1000 episodes — prevents self-play cycling |
 
 ## Methods
 
@@ -24,13 +25,26 @@ Off-policy, value-based learning with experience replay and a target network. Us
 On-policy, actor-critic method with clipped surrogate objectives and GAE. Directly optimizes a stochastic policy while maintaining training stability through conservative updates.
 
 ### Hybrid (RL + Minimax)
-Combines learned strategy with exact endgame solving. Minimax evaluates the position — if it's solved (forced win/loss within search depth), play the minimax move. Otherwise, defer to the RL agent's policy. Available as `dqn-hybrid` and `ppo-hybrid`.
+Combines learned strategy with exact endgame solving. Minimax evaluates the position:
+- **Forced win detected** — play the winning move
+- **Some moves lose, others safe** — filter out losing moves, let RL choose among safe ones
+- **Position unsolved** — defer entirely to the RL agent's policy
+
+Available as `dqn-hybrid` and `ppo-hybrid`.
+
+### Supervised Pretraining
+Conv layers are pretrained on the John Tromp solved Connect 4 dataset (~67k positions at 8 pieces, labeled win/loss/draw). This gives the network strong spatial features before RL training begins. During RL fine-tuning, conv layers are frozen (`--freeze-conv`) so only the FC head adapts — preserving the ground-truth features learned from solved data.
 
 ### Network Architecture
 Both agents share the same CNN backbone:
-- 3 convolutional layers (128 filters each) on a 6x7x2 input (one channel per player)
-- Fully connected head: 512 → 256 → output
+- 5 convolutional layers (256 filters each, 3x3, padding=1) on a 6x7x2 input (one channel per player)
+- Fully connected head: 1024 → 512 → 256 → output
 - DQN outputs 7 Q-values; PPO outputs a policy distribution + value estimate
+
+### Reward Shaping
+- **Win:** +1.0 with a speed bonus of up to +0.3 for faster wins
+- **Draw:** +0.2
+- **Loss:** -1.1 (asymmetric to discourage passive play)
 
 ## Performance Optimizations
 
@@ -38,14 +52,15 @@ Both agents share the same CNN backbone:
 - **C minimax engine** — alpha-beta pruning implemented in C, auto-compiled on first use
 - **Parallel minimax with pthreads** — all N opponent minimax calls batched into one parallel C call
 - **Batched self-play** — opponent forward passes batched on GPU instead of one-by-one
-- **Early termination** — when training against minimax, games end immediately if the opponent has a forced win (no need to play out lost positions)
+- **Arbiter (early termination)** — during self-play, minimax checks positions mid-game and ends lost games early (`--arbiter`)
+- **Game uniqueness tracking** — tracks unique games via move-sequence hashing to monitor training diversity
 - **MPS/CUDA support** — auto-detects Apple Silicon GPU or NVIDIA GPU
 
 ## Evaluation
 
 - **Win / Draw / Loss rates** against each opponent type
-- **Learning curves** — performance as a function of training steps
-- **Stability analysis** — mean ± std over multiple random seeds (3-5 runs)
+- **6-panel visualization** — board heatmaps (wins/losses/all games), win timing distribution, opening preferences, Q-value curves, column preference by result
+- **Stability analysis** — mean +/- std over multiple random seeds
 - Agents evaluated with **alternating first-player assignment** for fairness
 - Evaluation runs in parallel (128 envs) for fast results
 
@@ -53,28 +68,32 @@ Both agents share the same CNN backbone:
 
 ```
 ├── envs/
-│   ├── connect4.py          # Core game (6x7, Gym-like API)
-│   └── vec_connect4.py      # Vectorized N-game parallel environment
+│   ├── connect4.py              # Core game (6x7, Gym-like API)
+│   └── vec_connect4.py          # Vectorized N-game parallel environment
 ├── agents/
-│   ├── dqn/                 # DQN (Q-network, 3-step replay buffer, agent)
-│   ├── ppo/                 # PPO (actor-critic network, rollout buffer, agent)
-│   └── hybrid.py            # Hybrid agent (minimax + RL)
+│   ├── dqn/                     # DQN (Q-network, 3-step replay buffer, agent)
+│   ├── ppo/                     # PPO (actor-critic network, rollout buffer, agent)
+│   └── hybrid.py                # Hybrid agent (minimax + RL)
 ├── opponents/
 │   ├── random_opponent.py
 │   ├── heuristic_opponent.py
-│   ├── minimax_opponent.py  # Python wrapper (ctypes)
-│   ├── minimax_engine.c     # C engine (alpha-beta + pthreads)
+│   ├── minimax_opponent.py      # Python wrapper (ctypes)
+│   ├── minimax_engine.c         # C engine (alpha-beta + pthreads)
 │   └── self_play_opponent.py
 ├── training/
-│   ├── train_dqn.py         # DQN training loop
-│   └── train_ppo.py         # PPO training loop
+│   ├── train_dqn.py             # DQN training loop
+│   ├── train_ppo.py             # PPO training loop
+│   └── pretrain.py              # Supervised pretraining from solved dataset
 ├── evaluation/
-│   └── evaluate.py          # Parallel evaluation against opponents
+│   ├── evaluate.py              # Parallel evaluation against opponents
+│   └── visualize.py             # 6-panel game analysis visualization
+├── data/
+│   └── connect-4.data           # John Tromp solved positions dataset
 ├── models/
 │   ├── dqn/latest.pt
 │   └── ppo/latest.pt
-├── play.py                  # Interactive play (human or agent vs anything)
-├── build.sh                 # Manual C compilation script
+├── play.py                      # Interactive play (human or agent vs anything)
+├── build.sh                     # Manual C compilation script
 └── README.md
 ```
 
@@ -98,16 +117,22 @@ The minimax C engine compiles automatically on first use. To compile manually:
 bash build.sh
 ```
 
+### Supervised Pretraining
+```bash
+# Pretrain conv layers on the solved dataset
+python -m training.pretrain
+```
+
 ### Training
 
 Training auto-resumes from `models/<agent>/latest.pt` if it exists. Train incrementally against stronger opponents:
 
 ```bash
-# DQN — curriculum training
-python -m training.train_dqn --opponent random --episodes 5000
-python -m training.train_dqn --opponent heuristic --episodes 10000 --lr 5e-5
-python -m training.train_dqn --opponent minimax --episodes 20000 --lr 1e-5
-python -m training.train_dqn --opponent self --episodes 50000
+# DQN — curriculum training (with frozen pretrained conv)
+python -m training.train_dqn --opponent random --episodes 5000 --freeze-conv
+python -m training.train_dqn --opponent heuristic --episodes 10000 --freeze-conv --lr 5e-5
+python -m training.train_dqn --opponent minimax --episodes 20000 --freeze-conv --lr 1e-5
+python -m training.train_dqn --opponent self-mixed --episodes 50000 --freeze-conv --lr 1e-5
 
 # PPO — curriculum training
 python -m training.train_ppo --opponent random --episodes 5000
@@ -118,6 +143,8 @@ python -m training.train_ppo --opponent self --episodes 50000
 # Useful flags
 --fresh                  # Start from scratch (ignore latest.pt)
 --n-envs 128             # More parallel games (scale with CPU cores)
+--freeze-conv            # Freeze pretrained conv layers, train FC head only
+--arbiter                # Early termination via minimax during self-play
 --eps-start 0.1          # Start epsilon (DQN)
 --eps-decay 5000         # Epsilon decay steps (DQN)
 --lr 1e-4                # Learning rate
@@ -130,6 +157,12 @@ python -m training.train_ppo --opponent self --episodes 50000
 python -m evaluation.evaluate --agent dqn --opponent all
 python -m evaluation.evaluate --agent dqn-hybrid --opponent all
 python -m evaluation.evaluate --agent ppo --opponent minimax --games 200 --depth 6
+```
+
+### Visualization
+
+```bash
+python -m evaluation.visualize --agent dqn --opponent minimax --games 200
 ```
 
 ### Play
@@ -153,6 +186,7 @@ python play.py -p1 dqn-hybrid -p2 ppo-hybrid -n 10 --swap  # 10 games, alternate
 4. van Hasselt, H., Guez, A., & Silver, D. (2016). *Deep reinforcement learning with double Q-learning.* AAAI.
 5. Shah, S., & Gupta, S. (2022). *Reinforcement Learning for ConnectX.* arXiv:2210.08263.
 6. Knuth, D. E., & Moore, R. W. (1975). *An Analysis of Alpha-Beta Pruning.* Artificial Intelligence, 6(4), 293-326.
+7. Tromp, J. (2008). *John's Connect Four Playground.* https://tromp.github.io/c4/c4.html
 
 ## License
 
