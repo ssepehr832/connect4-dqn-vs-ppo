@@ -117,38 +117,53 @@ The minimax C engine compiles automatically on first use. To compile manually:
 bash build.sh
 ```
 
-### Supervised Pretraining
+### Quick Start — DQN (Fresh Training)
+
+Run these in order. Each step auto-resumes from the previous one.
+
 ```bash
-# Pretrain conv layers on the solved dataset
-python -m training.pretrain
+# Step 0: Pretrain conv layers on solved dataset
+python -m training.pretrain --agent dqn
+
+# Step 1: Random opponent (learn basics)
+python -m training.train_dqn --opponent random --episodes 5000 --freeze-conv --n-envs 1024 --arbiter
+
+# Step 2: Heuristic opponent (learn blocking + center control)
+python -m training.train_dqn --opponent heuristic --episodes 10000 --freeze-conv --lr 5e-5 --n-envs 1024 --arbiter
+
+# Step 3: Minimax opponent (learn against near-optimal play)
+python -m training.train_dqn --opponent minimax --episodes 20000 --freeze-conv --lr 1e-5 --n-envs 1024 --arbiter
+
+# Step 4: Self-mixed (self-play + minimax, discover new strategies)
+python -m training.train_dqn --opponent self-mixed --episodes 50000 --freeze-conv --lr 1e-5 --n-envs 1024 --arbiter
+
+# Evaluate
+python -m evaluation.evaluate --agent dqn-hybrid --opponent all
 ```
 
-### Training
-
-Training auto-resumes from `models/<agent>/latest.pt` if it exists. Train incrementally against stronger opponents:
+### Quick Start — PPO (Fresh Training)
 
 ```bash
-# DQN — curriculum training (with frozen pretrained conv)
-python -m training.train_dqn --opponent random --episodes 5000 --freeze-conv
-python -m training.train_dqn --opponent heuristic --episodes 10000 --freeze-conv --lr 5e-5
-python -m training.train_dqn --opponent minimax --episodes 20000 --freeze-conv --lr 1e-5
-python -m training.train_dqn --opponent self-mixed --episodes 50000 --freeze-conv --lr 1e-5
-
-# PPO — curriculum training
 python -m training.train_ppo --opponent random --episodes 5000
 python -m training.train_ppo --opponent heuristic --episodes 10000
 python -m training.train_ppo --opponent minimax --episodes 20000
 python -m training.train_ppo --opponent self --episodes 50000
+```
 
-# Useful flags
+### Training Flags
+```
 --fresh                  # Start from scratch (ignore latest.pt)
 --n-envs 128             # More parallel games (scale with CPU cores)
---freeze-conv            # Freeze pretrained conv layers, train FC head only
+--freeze-conv            # Freeze pretrained conv layers (DQN)
 --arbiter                # Early termination via minimax during self-play
---eps-start 0.1          # Start epsilon (DQN)
---eps-decay 5000         # Epsilon decay steps (DQN)
+--arbiter-depth 4        # Minimax depth for arbiter (default: 4)
+--arbiter-min-pieces 12  # Only activate arbiter after this many pieces on board
+--eps-start 0.1          # Starting epsilon (DQN)
+--eps-end 0.05           # Minimum epsilon (DQN)
+--eps-decay 80000        # Epsilon decay steps (DQN)
 --lr 1e-4                # Learning rate
 --entropy-coef 0.05      # Exploration bonus (PPO)
+--seed 42                # Random seed
 ```
 
 ### Evaluation
