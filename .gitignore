@@ -24,3 +24,6 @@ data/
 # Results (plots, logs)
 results/*.png
 results/*.pt
+
+# Model checkpoints
+models/
