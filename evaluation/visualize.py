@@ -19,6 +19,9 @@ import torch
 from envs.connect4 import Connect4Env, ROWS, COLS
 from opponents import RandomOpponent, HeuristicOpponent, MinimaxOpponent
 
+# Depth for NeuralMinimaxAgent — set by main() from --nm-depth
+_NM_DEPTH = 3
+
 
 def load_agent(agent_type):
     if agent_type == "dqn":
@@ -65,6 +68,18 @@ def load_agent(agent_type):
             sys.exit(1)
         rl_agent.load(path)
         return HybridAgent(rl_agent)
+    elif agent_type == "dqn-neural-minimax":
+        from agents.dqn.agent import DQNAgent
+        from agents.neural_minimax import NeuralMinimaxAgent
+        rl_agent = DQNAgent()
+        path = "models/dqn/latest.pt"
+        if not os.path.exists(path):
+            print(f"Error: No saved model at {path}. Train first.")
+            sys.exit(1)
+        rl_agent.load(path)
+        rl_agent.epsilon_start = 0.0
+        rl_agent.epsilon_end = 0.0
+        return NeuralMinimaxAgent(rl_agent, depth=_NM_DEPTH)
     else:
         print(f"Unknown agent type: {agent_type}")
         sys.exit(1)
@@ -82,6 +97,12 @@ def make_opponent(name, depth=4, agent=None):
             raise ValueError("Self-play requires an agent to copy")
         from evaluation.evaluate import EvalSelfPlayOpponent
         return EvalSelfPlayOpponent(agent, epsilon=0.05)
+    elif name == "hybrid":
+        from evaluation.evaluate import _AgentAsOpponent
+        return _AgentAsOpponent(load_agent("dqn-hybrid"))
+    elif name == "neural-minimax":
+        from evaluation.evaluate import _AgentAsOpponent
+        return _AgentAsOpponent(load_agent("dqn-neural-minimax"))
     else:
         raise ValueError(f"Unknown opponent: {name}")
 
@@ -404,19 +425,25 @@ def visualize_opponent(agent, agent_name, opp_name, games, depth, save_path=None
 
 def main():
     parser = argparse.ArgumentParser(description="Visualize agent play style")
-    parser.add_argument("--agent", default="dqn", choices=["dqn", "ppo", "dqn-hybrid", "ppo-hybrid"])
+    parser.add_argument("--agent", default="dqn",
+                        choices=["dqn", "ppo", "dqn-hybrid", "ppo-hybrid", "dqn-neural-minimax"])
     parser.add_argument("--opponent", default="all",
-                        choices=["all", "random", "heuristic", "minimax", "self"])
+                        choices=["all", "random", "heuristic", "minimax", "hybrid", "neural-minimax"])
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--depth", type=int, default=4)
+    parser.add_argument("--nm-depth", type=int, default=3,
+                        help="Neural-minimax search depth (default: 3)")
     parser.add_argument("--save", type=str, default=None,
                         help="Save to file instead of showing (use 'auto' for auto-naming)")
     args = parser.parse_args()
 
+    global _NM_DEPTH
+    _NM_DEPTH = args.nm_depth
+
     agent = load_agent(args.agent)
 
     if args.opponent == "all":
-        opponents = ["random", "heuristic", "minimax", "self"]
+        opponents = ["random", "heuristic", "minimax"]
     else:
         opponents = [args.opponent]
 

@@ -160,9 +160,18 @@ def progress_line(ep, total, t_start, extra=""):
 def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
                      save_dir="models/dqn", self_play_update=3000, n_envs=16,
                      chunk_size=1000, arbiter=None, arbiter_min_pieces=12,
-                     snapshot_every=10000):
-    """Alternate between self-play and minimax in chunks."""
+                     snapshot_every=10000, self_play_frac=0.5):
+    """Alternate between self-play and minimax in chunks.
+
+    Args:
+        chunk_size:     total episodes per alternating cycle
+        self_play_frac: fraction of each cycle spent on self-play (rest is minimax)
+    """
     os.makedirs(save_dir, exist_ok=True)
+
+    # Proportional chunk sizes (minimum 1 so ratios like 0.0/1.0 still work)
+    self_chunk = max(1, int(round(chunk_size * self_play_frac)))
+    minimax_chunk = max(1, chunk_size - self_chunk)
 
     # Two vec_envs: one for self-play (with arbiter), one for minimax (no arbiter needed)
     vec_self = VecConnect4Env(n_envs, self_opp, arbiter=arbiter,
@@ -173,7 +182,8 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
     print(f"\n{'='*60}")
     print(f"Training DQN vs self-mixed for {episodes} episodes ({n_envs} parallel games)")
     print(f"  lr={lr:.1e} | ε={agent.epsilon:.3f}→{agent.epsilon_end} over {agent.epsilon_decay_steps} steps")
-    print(f"  snapshot updates every {self_play_update} eps | chunks of {chunk_size} eps")
+    print(f"  snapshot updates every {self_play_update} eps")
+    print(f"  cycle: {self_chunk} self-play + {minimax_chunk} minimax ({int(self_play_frac*100)}% self-play)")
     if arbiter is not None:
         print(f"  arbiter: minimax depth {arbiter.depth}, active after {arbiter_min_pieces} pieces")
     print(f"{'='*60}")
@@ -188,6 +198,7 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
     ep_count = 0
     chunk_ep = 0  # episodes within current chunk
     use_self = True  # start with self-play
+    current_chunk_size = self_chunk
 
     vec_env = vec_self
     states = vec_env.reset_all()
@@ -224,10 +235,11 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
             self_opp.update_snapshot(agent)
             vec_self.opponent = self_opp
 
-        # Switch chunks
-        if chunk_ep >= chunk_size:
+        # Switch chunks when current phase's episode budget is exhausted
+        if chunk_ep >= current_chunk_size:
             chunk_ep = 0
             use_self = not use_self
+            current_chunk_size = self_chunk if use_self else minimax_chunk
             vec_env = vec_self if use_self else vec_minimax
             # Flush n-step buffers to avoid mixing trajectories across chunk switches
             agent.flush_n_step_buffers()
@@ -397,7 +409,16 @@ def main():
                         help="Minimum pieces on board before arbiter checks (default: 12)")
     parser.add_argument("--freeze-conv", action="store_true",
                         help="Freeze conv layers, only train FC head (for pretrained models)")
+    parser.add_argument("--self-play-frac", type=float, default=0.5,
+                        help="Fraction of self-mixed training on self-play (rest is minimax). "
+                             "E.g. 0.8 = 80%% self-play, 20%% minimax. Default: 0.5")
+    parser.add_argument("--chunk-size", type=int, default=5000,
+                        help="Episodes per self-mixed alternation cycle. "
+                             "Larger = more stable per phase, less switching. Default: 5000")
     args = parser.parse_args()
+
+    if not 0.0 <= args.self_play_frac <= 1.0:
+        parser.error("--self-play-frac must be between 0.0 and 1.0")
 
     # Seed everything
     random.seed(args.seed)
@@ -451,8 +472,9 @@ def main():
             agent, self_opp, minimax_opp,
             episodes=args.episodes, save_dir=args.save_dir,
             n_envs=args.n_envs, self_play_update=3000,
-            chunk_size=1000, arbiter=arbiter,
+            chunk_size=args.chunk_size, arbiter=arbiter,
             arbiter_min_pieces=args.arbiter_min_pieces,
+            self_play_frac=args.self_play_frac,
         )
     else:
         if args.opponent == "self":
