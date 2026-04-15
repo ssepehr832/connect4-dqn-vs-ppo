@@ -159,7 +159,8 @@ def progress_line(ep, total, t_start, extra=""):
 
 def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
                      save_dir="models/dqn", self_play_update=3000, n_envs=16,
-                     chunk_size=1000, arbiter=None, arbiter_min_pieces=12):
+                     chunk_size=1000, arbiter=None, arbiter_min_pieces=12,
+                     snapshot_every=10000):
     """Alternate between self-play and minimax in chunks."""
     os.makedirs(save_dir, exist_ok=True)
 
@@ -183,6 +184,7 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
     t_start = time.time()
     last_print = 0.0
     last_checkpoint = 0
+    last_snapshot = 0
     ep_count = 0
     chunk_ep = 0  # episodes within current chunk
     use_self = True  # start with self-play
@@ -251,6 +253,12 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
             agent.save(os.path.join(save_dir, "latest.pt"))
             last_checkpoint = ep_count
 
+        # Periodic snapshot
+        if ep_count - last_snapshot >= snapshot_every:
+            snap_path = os.path.join(save_dir, f"snapshot_{ep_count}.pt")
+            agent.save(snap_path)
+            last_snapshot = ep_count
+
         if ep_count >= episodes:
             break
 
@@ -261,7 +269,7 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
 
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
                    save_dir="models/dqn", self_play_update=3000, n_envs=16,
-                   arbiter=None, arbiter_min_pieces=12):
+                   arbiter=None, arbiter_min_pieces=12, snapshot_every=10000):
     """Train DQN agent against opponent using n_envs parallel games."""
     vec_env = VecConnect4Env(n_envs, opponent, arbiter=arbiter,
                              arbiter_min_pieces=arbiter_min_pieces)
@@ -284,6 +292,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
     t_start = time.time()
     last_print = 0.0
     last_checkpoint = 0
+    last_snapshot = 0
 
     ep_count = 0
     states = vec_env.reset_all()  # (N, 6, 7, 2)
@@ -348,6 +357,12 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
         if ep_count - last_checkpoint >= save_every:
             agent.save(os.path.join(save_dir, "latest.pt"))
             last_checkpoint = ep_count
+
+        # Periodic snapshot (keeps a copy every snapshot_every episodes)
+        if ep_count - last_snapshot >= snapshot_every:
+            snap_path = os.path.join(save_dir, f"snapshot_{ep_count}.pt")
+            agent.save(snap_path)
+            last_snapshot = ep_count
 
         if ep_count >= episodes:
             break

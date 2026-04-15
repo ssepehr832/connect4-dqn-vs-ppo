@@ -207,16 +207,27 @@ class DQNAgent:
             self.target_net.load_state_dict(self.q_net.state_dict())
 
     def save(self, path):
-        """Save model weights and training state."""
-        torch.save(
-            {
-                "q_net": self.q_net.state_dict(),
-                "target_net": self.target_net.state_dict(),
-                "optimizer": self.optimizer.state_dict(),
-                "steps_done": self.steps_done,
-            },
-            path,
+        """Save model weights and training state (atomic write to prevent corruption)."""
+        import tempfile, os
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(path) or ".", suffix=".tmp"
         )
+        os.close(tmp_fd)
+        try:
+            torch.save(
+                {
+                    "q_net": self.q_net.state_dict(),
+                    "target_net": self.target_net.state_dict(),
+                    "optimizer": self.optimizer.state_dict(),
+                    "steps_done": self.steps_done,
+                },
+                tmp_path,
+            )
+            os.replace(tmp_path, path)  # atomic on POSIX
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     def load(self, path):
         """Load model weights and training state."""
