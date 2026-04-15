@@ -21,7 +21,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from envs.connect4 import Connect4Env
-from envs.vec_connect4 import VecConnect4Env
+from envs.vec_connect4 import VecConnect4Env, REWARD_WIN
 from agents.dqn.agent import DQNAgent
 from opponents import RandomOpponent, HeuristicOpponent, MinimaxOpponent
 from opponents.self_play_opponent import SelfPlayOpponent
@@ -418,7 +418,7 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
         # Rolling win rates per mode (used by progress bar + metrics logger)
         def _win_rate(hist):
             recent = hist[-500:] if hist else []
-            return sum(1 for r in recent if r > 0) / len(recent) if recent else None
+            return sum(1 for r in recent if r >= REWARD_WIN) / len(recent) if recent else None
 
         # Throttled progress bar
         now = time.time()
@@ -576,7 +576,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
         if now - last_print >= 0.5 or ep_count >= episodes:
             # Rolling win rate from last 500 episodes
             recent = reward_history[-500:] if reward_history else []
-            win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0
+            win_rate = sum(1 for r in recent if r >= REWARD_WIN) / len(recent) if recent else 0
             uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
 
             sys.stdout.write(progress_line(
@@ -601,7 +601,7 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
         # Periodic metrics log
         if ep_count - last_metrics_log >= metrics_every:
             recent = reward_history[-500:] if reward_history else []
-            win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0.0
+            win_rate = sum(1 for r in recent if r >= REWARD_WIN) / len(recent) if recent else 0.0
             uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
             metrics_logger.log(
                 episode=episode_offset + ep_count,
