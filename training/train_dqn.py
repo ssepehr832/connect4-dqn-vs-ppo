@@ -157,10 +157,163 @@ def progress_line(ep, total, t_start, extra=""):
     return f"\r{line}" + " " * max(0, cols - 1 - len(line))
 
 
+def _find_snapshot_offset(save_dir):
+    """Return the highest episode number across existing snapshot_*.pt files."""
+    if not os.path.isdir(save_dir):
+        return 0
+    max_ep = 0
+    for name in os.listdir(save_dir):
+        if name.startswith("snapshot_") and name.endswith(".pt"):
+            stem = name[len("snapshot_"):-len(".pt")]
+            try:
+                ep = int(stem)
+            except ValueError:
+                continue
+            if ep > max_ep:
+                max_ep = ep
+    return max_ep
+
+
+def _find_csv_episode_offset(path):
+    """Return the max value in the 'episode' column of an existing CSV, or 0."""
+    if not os.path.exists(path):
+        return 0
+    import csv as _csv
+    max_ep = 0
+    try:
+        with open(path, "r") as f:
+            reader = _csv.DictReader(f)
+            for row in reader:
+                try:
+                    ep = int(float(row.get("episode", 0)))
+                    if ep > max_ep:
+                        max_ep = ep
+                except (ValueError, TypeError):
+                    continue
+    except Exception:
+        return 0
+    return max_ep
+
+
+def find_episode_offset(save_dir):
+    """Return the highest episode number seen in this save_dir across
+    snapshot filenames, metrics.csv, and eval.csv.
+
+    Used to keep episode numbering cumulative across multiple training runs
+    to the same save_dir (so a 10k random → 50k minimax → 500k self-mixed
+    curriculum shows up as one continuous 560k-episode timeline).
+    """
+    offsets = [_find_snapshot_offset(save_dir)]
+    for name in ("metrics.csv", "eval.csv"):
+        offsets.append(_find_csv_episode_offset(os.path.join(save_dir, name)))
+    return max(offsets)
+
+
+class MetricsLogger:
+    """Append training metrics to metrics.csv every N episodes.
+
+    Unified schema (columns empty when not applicable):
+        episode, phase, epsilon, unique_pct,
+        win_rate, win_rate_self, win_rate_minimax
+
+    - Standard training fills `win_rate`; self-mixed fills the two per-mode
+      columns. Phase = opponent name (random/heuristic/minimax/self/self-mixed).
+    - Existing files with matching headers are appended to; otherwise a fresh
+      file is written.
+    """
+
+    HEADER = (
+        "episode,phase,epsilon,unique_pct,"
+        "win_rate,win_rate_self,win_rate_minimax\n"
+    )
+
+    def __init__(self, save_dir, phase, fresh=True):
+        self.path = os.path.join(save_dir, "metrics.csv")
+        self.phase = phase
+        self._ensure_header(fresh)
+
+    def _ensure_header(self, fresh):
+        if fresh or not os.path.exists(self.path):
+            with open(self.path, "w") as f:
+                f.write(self.HEADER)
+            return
+        # Check header compatibility — rewrite if mismatched
+        with open(self.path, "r") as f:
+            first_line = f.readline()
+        if first_line != self.HEADER:
+            print(f"  [metrics] existing {self.path} has old schema; rewriting")
+            with open(self.path, "w") as f:
+                f.write(self.HEADER)
+
+    def log(self, episode, epsilon, unique_pct,
+            win_rate=None, win_rate_self=None, win_rate_minimax=None):
+        wr = f"{win_rate:.4f}" if win_rate is not None else ""
+        wrs = f"{win_rate_self:.4f}" if win_rate_self is not None else ""
+        wrm = f"{win_rate_minimax:.4f}" if win_rate_minimax is not None else ""
+        with open(self.path, "a") as f:
+            f.write(
+                f"{episode},{self.phase},{epsilon:.4f},{unique_pct:.4f},"
+                f"{wr},{wrs},{wrm}\n"
+            )
+
+
+class EvalLogger:
+    """Append periodic evaluation results to eval.csv.
+
+    Schema: episode, phase, vs_random, vs_heuristic, vs_minimax
+    """
+
+    HEADER = "episode,phase,vs_random,vs_heuristic,vs_minimax\n"
+
+    def __init__(self, save_dir, phase, fresh=True):
+        self.path = os.path.join(save_dir, "eval.csv")
+        self.phase = phase
+        self._ensure_header(fresh)
+
+    def _ensure_header(self, fresh):
+        if fresh or not os.path.exists(self.path):
+            with open(self.path, "w") as f:
+                f.write(self.HEADER)
+            return
+        with open(self.path, "r") as f:
+            first_line = f.readline()
+        if first_line != self.HEADER:
+            print(f"  [eval] existing {self.path} has old schema; rewriting")
+            with open(self.path, "w") as f:
+                f.write(self.HEADER)
+
+    def log(self, episode, results):
+        with open(self.path, "a") as f:
+            f.write(
+                f"{episode},{self.phase},{results['random']:.4f},"
+                f"{results['heuristic']:.4f},{results['minimax']:.4f}\n"
+            )
+
+
+def run_periodic_eval(agent, games=50, depth=4):
+    """Evaluate the (in-memory) agent against random / heuristic / minimax.
+
+    Returns a dict of {opponent_name: win_rate} where win_rate = wins / total
+    (draws and losses both count as non-wins).
+    """
+    from evaluation.evaluate import evaluate, make_opponent
+
+    results = {}
+    for name in ["random", "heuristic", "minimax"]:
+        opp = make_opponent(name, depth=depth)
+        w, d, l, _, _ = evaluate(agent, opp, games)
+        total = w + d + l
+        results[name] = w / total if total > 0 else 0.0
+    return results
+
+
 def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
                      save_dir="models/dqn", self_play_update=3000, n_envs=16,
                      chunk_size=1000, arbiter=None, arbiter_min_pieces=12,
-                     snapshot_every=10000, self_play_frac=0.5):
+                     snapshot_every=10000, self_play_frac=0.5,
+                     metrics_every=500, eval_every=10_000, eval_games=50,
+                     eval_depth=4, fresh_logs=True,
+                     phase="self-mixed", episode_offset=0):
     """Alternate between self-play and minimax in chunks.
 
     Args:
@@ -188,17 +341,31 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
         print(f"  arbiter: minimax depth {arbiter.depth}, active after {arbiter_min_pieces} pieces")
     print(f"{'='*60}")
 
-    reward_history = []
+    # Separate reward histories per mode — combined win rate is meaningless
+    # in self-mixed (self-play chunks hover at 50% by construction).
+    reward_history_self = []
+    reward_history_minimax = []
     unique_games = set()
     total_games = 0
     t_start = time.time()
     last_print = 0.0
     last_checkpoint = 0
     last_snapshot = 0
+    last_metrics_log = 0
+    last_eval = 0
     ep_count = 0
     chunk_ep = 0  # episodes within current chunk
     use_self = True  # start with self-play
     current_chunk_size = self_chunk
+
+    metrics_logger = MetricsLogger(save_dir, phase=phase, fresh=fresh_logs)
+    eval_logger = (
+        EvalLogger(save_dir, phase=phase, fresh=fresh_logs)
+        if eval_every > 0 else None
+    )
+
+    if episode_offset > 0:
+        print(f"  continuing from episode {episode_offset} (cumulative across runs)")
 
     vec_env = vec_self
     states = vec_env.reset_all()
@@ -221,9 +388,10 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
         agent.step_schedule()
 
         n_done = int(dones.sum())
+        cur_history = reward_history_self if use_self else reward_history_minimax
         for i in range(n_envs):
             if dones[i]:
-                reward_history.append(rewards[i])
+                cur_history.append(rewards[i])
         for h in vec_env.drain_game_hashes():
             unique_games.add(h)
             total_games += 1
@@ -247,16 +415,26 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
         else:
             states = vec_env.get_states()
 
+        # Rolling win rates per mode (used by progress bar + metrics logger)
+        def _win_rate(hist):
+            recent = hist[-500:] if hist else []
+            return sum(1 for r in recent if r > 0) / len(recent) if recent else None
+
         # Throttled progress bar
         now = time.time()
         if now - last_print >= 0.5 or ep_count >= episodes:
-            recent = reward_history[-500:] if reward_history else []
-            win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0
+            wrs = _win_rate(reward_history_self)
+            wrm = _win_rate(reward_history_minimax)
             uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
             mode = "self" if use_self else "minimax"
+            wr_str = (
+                f"self={wrs:.0%}" if wrs is not None else "self=—"
+            ) + "/" + (
+                f"mm={wrm:.0%}" if wrm is not None else "mm=—"
+            )
             sys.stdout.write(progress_line(
                 min(ep_count, episodes), episodes, t_start,
-                extra=f"ε={agent.epsilon:.3f} | win={win_rate:.0%} | uniq={uniq_pct:.0%} | {mode}"
+                extra=f"ε={agent.epsilon:.3f} | {wr_str} | uniq={uniq_pct:.0%} | {mode}"
             ))
             sys.stdout.flush()
             last_print = now
@@ -267,9 +445,38 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
 
         # Periodic snapshot
         if ep_count - last_snapshot >= snapshot_every:
-            snap_path = os.path.join(save_dir, f"snapshot_{ep_count}.pt")
+            cum_ep = episode_offset + ep_count
+            snap_path = os.path.join(save_dir, f"snapshot_{cum_ep}.pt")
             agent.save(snap_path)
             last_snapshot = ep_count
+
+        # Periodic metrics log
+        if ep_count - last_metrics_log >= metrics_every:
+            wrs = _win_rate(reward_history_self)
+            wrm = _win_rate(reward_history_minimax)
+            uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
+            metrics_logger.log(
+                episode=episode_offset + ep_count,
+                epsilon=agent.epsilon,
+                unique_pct=uniq_pct,
+                win_rate_self=wrs,
+                win_rate_minimax=wrm,
+            )
+            last_metrics_log = ep_count
+
+        # Periodic eval vs fixed opponents
+        if eval_logger is not None and ep_count - last_eval >= eval_every:
+            sys.stdout.write("\n  running periodic eval...")
+            sys.stdout.flush()
+            results = run_periodic_eval(agent, games=eval_games, depth=eval_depth)
+            cum_ep = episode_offset + ep_count
+            eval_logger.log(cum_ep, results)
+            sys.stdout.write(
+                f"\r  eval @ {cum_ep}: rnd={results['random']:.0%} "
+                f"heur={results['heuristic']:.0%} mm={results['minimax']:.0%}\n"
+            )
+            sys.stdout.flush()
+            last_eval = ep_count
 
         if ep_count >= episodes:
             break
@@ -281,7 +488,9 @@ def train_self_mixed(agent, self_opp, minimax_opp, episodes, save_every=500,
 
 def train_against(agent, opponent, opponent_name, episodes, save_every=500,
                    save_dir="models/dqn", self_play_update=3000, n_envs=16,
-                   arbiter=None, arbiter_min_pieces=12, snapshot_every=10000):
+                   arbiter=None, arbiter_min_pieces=12, snapshot_every=10000,
+                   metrics_every=500, eval_every=10_000, eval_games=50,
+                   eval_depth=4, fresh_logs=True, episode_offset=0, phase=None):
     """Train DQN agent against opponent using n_envs parallel games."""
     vec_env = VecConnect4Env(n_envs, opponent, arbiter=arbiter,
                              arbiter_min_pieces=arbiter_min_pieces)
@@ -305,6 +514,18 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
     last_print = 0.0
     last_checkpoint = 0
     last_snapshot = 0
+    last_metrics_log = 0
+    last_eval = 0
+
+    phase_name = phase or opponent_name
+    metrics_logger = MetricsLogger(save_dir, phase=phase_name, fresh=fresh_logs)
+    eval_logger = (
+        EvalLogger(save_dir, phase=phase_name, fresh=fresh_logs)
+        if eval_every > 0 else None
+    )
+
+    if episode_offset > 0:
+        print(f"  continuing from episode {episode_offset} (cumulative across runs)")
 
     ep_count = 0
     states = vec_env.reset_all()  # (N, 6, 7, 2)
@@ -372,9 +593,37 @@ def train_against(agent, opponent, opponent_name, episodes, save_every=500,
 
         # Periodic snapshot (keeps a copy every snapshot_every episodes)
         if ep_count - last_snapshot >= snapshot_every:
-            snap_path = os.path.join(save_dir, f"snapshot_{ep_count}.pt")
+            cum_ep = episode_offset + ep_count
+            snap_path = os.path.join(save_dir, f"snapshot_{cum_ep}.pt")
             agent.save(snap_path)
             last_snapshot = ep_count
+
+        # Periodic metrics log
+        if ep_count - last_metrics_log >= metrics_every:
+            recent = reward_history[-500:] if reward_history else []
+            win_rate = sum(1 for r in recent if r > 0) / len(recent) if recent else 0.0
+            uniq_pct = len(unique_games) / total_games if total_games > 0 else 1.0
+            metrics_logger.log(
+                episode=episode_offset + ep_count,
+                epsilon=agent.epsilon,
+                unique_pct=uniq_pct,
+                win_rate=win_rate,
+            )
+            last_metrics_log = ep_count
+
+        # Periodic eval vs fixed opponents
+        if eval_logger is not None and ep_count - last_eval >= eval_every:
+            sys.stdout.write("\n  running periodic eval...")
+            sys.stdout.flush()
+            results = run_periodic_eval(agent, games=eval_games, depth=eval_depth)
+            cum_ep = episode_offset + ep_count
+            eval_logger.log(cum_ep, results)
+            sys.stdout.write(
+                f"\r  eval @ {cum_ep}: rnd={results['random']:.0%} "
+                f"heur={results['heuristic']:.0%} mm={results['minimax']:.0%}\n"
+            )
+            sys.stdout.flush()
+            last_eval = ep_count
 
         if ep_count >= episodes:
             break
@@ -415,6 +664,20 @@ def main():
     parser.add_argument("--chunk-size", type=int, default=5000,
                         help="Episodes per self-mixed alternation cycle. "
                              "Larger = more stable per phase, less switching. Default: 5000")
+    parser.add_argument("--metrics-every", type=int, default=500,
+                        help="Log training metrics (win rate, epsilon, ...) every N episodes. Default: 500")
+    parser.add_argument("--eval-every", type=int, default=10_000,
+                        help="Run periodic eval vs random/heuristic/minimax every N episodes. "
+                             "Set to 0 to disable. Default: 10000")
+    parser.add_argument("--eval-games", type=int, default=50,
+                        help="Games per opponent during periodic eval. Default: 50")
+    parser.add_argument("--eval-depth", type=int, default=4,
+                        help="Minimax depth for periodic eval (keep low for speed). Default: 4")
+    parser.add_argument("--phase-label", type=str, default=None,
+                        help="Override the phase name written to metrics.csv / eval.csv "
+                             "(default: opponent name, or 'self-mixed' for self-mixed). "
+                             "Useful for distinguishing multiple runs with the same opponent "
+                             "(e.g. 'random' vs 'random+arbiter') in plots.")
     args = parser.parse_args()
 
     if not 0.0 <= args.self_play_frac <= 1.0:
@@ -460,6 +723,11 @@ def main():
         for param_group in agent.optimizer.param_groups:
             param_group["lr"] = args.lr
 
+    # Episode numbering continues across runs to the same save_dir unless
+    # --fresh is passed. This lets curriculum-style training (e.g. 10k random
+    # → 50k minimax → 500k self-mixed) show up as one continuous timeline.
+    episode_offset = 0 if args.fresh else find_episode_offset(args.save_dir)
+
     if args.opponent == "self-mixed":
         # Alternating self-play + minimax training
         self_opp = SelfPlayOpponent(agent)
@@ -475,6 +743,13 @@ def main():
             chunk_size=args.chunk_size, arbiter=arbiter,
             arbiter_min_pieces=args.arbiter_min_pieces,
             self_play_frac=args.self_play_frac,
+            metrics_every=args.metrics_every,
+            eval_every=args.eval_every,
+            eval_games=args.eval_games,
+            eval_depth=args.eval_depth,
+            fresh_logs=args.fresh,
+            phase=args.phase_label or "self-mixed",
+            episode_offset=episode_offset,
         )
     else:
         if args.opponent == "self":
@@ -497,6 +772,13 @@ def main():
             episodes=args.episodes, save_dir=args.save_dir,
             n_envs=args.n_envs, arbiter=arbiter,
             arbiter_min_pieces=args.arbiter_min_pieces,
+            metrics_every=args.metrics_every,
+            eval_every=args.eval_every,
+            eval_games=args.eval_games,
+            eval_depth=args.eval_depth,
+            fresh_logs=args.fresh,
+            episode_offset=episode_offset,
+            phase=args.phase_label,
         )
 
     print("\nTraining complete!")
