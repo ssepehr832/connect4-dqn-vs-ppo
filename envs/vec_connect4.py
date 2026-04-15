@@ -58,6 +58,7 @@ class VecConnect4Env:
         # Move tracking for game uniqueness detection
         self._move_seqs = [[] for _ in range(n_envs)]
         self._finished_hashes = []  # hashes of completed games since last drain
+        self._finished_records = []  # structured episode summaries since last drain
 
     def reset_all(self):
         """Reset all envs, randomize sides, let opponent go first if needed."""
@@ -70,6 +71,7 @@ class VecConnect4Env:
         self.dones[:] = False
         self._move_seqs = [[] for _ in range(self.n_envs)]
         self._finished_hashes = []
+        self._finished_records = []
 
         # Opponent goes first where agent is P2
         opp_first = [i for i in range(self.n_envs) if self.agent_player[i] == 2]
@@ -129,6 +131,8 @@ class VecConnect4Env:
         rewards = np.zeros(self.n_envs, dtype=np.float32)
         dones = np.zeros(self.n_envs, dtype=bool)
         next_legals = [[] for _ in range(self.n_envs)]
+        outcomes = [None for _ in range(self.n_envs)]
+        termination_sources = [None for _ in range(self.n_envs)]
 
         # --- Agent moves (all envs) ---
         needs_opp = []  # indices that need opponent response
@@ -140,9 +144,13 @@ class VecConnect4Env:
             if self._check_win(i, row, col):
                 rewards[i] = win_reward(self.boards[i])
                 dones[i] = True
+                outcomes[i] = "win"
+                termination_sources[i] = "natural"
             elif self._is_full(i):
                 rewards[i] = REWARD_DRAW
                 dones[i] = True
+                outcomes[i] = "draw"
+                termination_sources[i] = "natural"
             else:
                 self.current_player[i] = 3 - ap
                 needs_opp.append(i)
@@ -165,11 +173,15 @@ class VecConnect4Env:
                             # Opponent has a forced win — agent loss
                             rewards[i] = REWARD_LOSS
                             dones[i] = True
+                            outcomes[i] = "loss"
+                            termination_sources[i] = "solved"
                             continue
                         if best_score <= -10000:
                             # Opponent has a forced loss — agent win
                             rewards[i] = win_reward(self.boards[i])
                             dones[i] = True
+                            outcomes[i] = "win"
+                            termination_sources[i] = "solved"
                             continue
 
                     # Pick randomly among best moves (non-deterministic)
@@ -180,9 +192,13 @@ class VecConnect4Env:
                     if self._check_win(i, row, col):
                         rewards[i] = REWARD_LOSS
                         dones[i] = True
+                        outcomes[i] = "loss"
+                        termination_sources[i] = "natural"
                     elif self._is_full(i):
                         rewards[i] = REWARD_DRAW
                         dones[i] = True
+                        outcomes[i] = "draw"
+                        termination_sources[i] = "natural"
                     else:
                         self.current_player[i] = self.agent_player[i]
                         next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
@@ -195,9 +211,13 @@ class VecConnect4Env:
                     if self._check_win(i, row, col):
                         rewards[i] = REWARD_LOSS
                         dones[i] = True
+                        outcomes[i] = "loss"
+                        termination_sources[i] = "natural"
                     elif self._is_full(i):
                         rewards[i] = REWARD_DRAW
                         dones[i] = True
+                        outcomes[i] = "draw"
+                        termination_sources[i] = "natural"
                     else:
                         self.current_player[i] = self.agent_player[i]
                         next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
@@ -210,9 +230,13 @@ class VecConnect4Env:
                     if self._check_win(i, row, col):
                         rewards[i] = REWARD_LOSS
                         dones[i] = True
+                        outcomes[i] = "loss"
+                        termination_sources[i] = "natural"
                     elif self._is_full(i):
                         rewards[i] = REWARD_DRAW
                         dones[i] = True
+                        outcomes[i] = "draw"
+                        termination_sources[i] = "natural"
                     else:
                         self.current_player[i] = self.agent_player[i]
                         next_legals[i] = [c for c in range(COLS) if self.boards[i, 0, c] == 0]
@@ -242,10 +266,14 @@ class VecConnect4Env:
                         # Agent has a forced win
                         rewards[i] = win_reward(self.boards[i])
                         dones[i] = True
+                        outcomes[i] = "win"
+                        termination_sources[i] = "solved"
                     elif best_score <= -10000:
                         # Agent has a forced loss
                         rewards[i] = REWARD_LOSS
                         dones[i] = True
+                        outcomes[i] = "loss"
+                        termination_sources[i] = "solved"
 
         # Get next states before resetting
         next_states = self.get_states()
@@ -255,7 +283,24 @@ class VecConnect4Env:
         opp_first_indices = []
         for i in reset_indices:
             # Hash finished game for uniqueness tracking
-            self._finished_hashes.append(hash(tuple(self._move_seqs[i])))
+            game_hash = hash(tuple(self._move_seqs[i]))
+            self._finished_hashes.append(game_hash)
+            outcome = outcomes[i]
+            if outcome is None:
+                if abs(float(rewards[i]) - REWARD_DRAW) < 1e-6:
+                    outcome = "draw"
+                elif rewards[i] > 0:
+                    outcome = "win"
+                else:
+                    outcome = "loss"
+            self._finished_records.append({
+                "outcome": outcome,
+                "reward": float(rewards[i]),
+                "game_length": len(self._move_seqs[i]),
+                "termination_source": termination_sources[i] or "natural",
+                "game_hash": game_hash,
+                "agent_player": int(self.agent_player[i]),
+            })
             self._move_seqs[i] = []
             self.boards[i] = 0
             self.agent_player[i] = 3 - self.agent_player[i]
@@ -284,6 +329,12 @@ class VecConnect4Env:
         hashes = self._finished_hashes
         self._finished_hashes = []
         return hashes
+
+    def drain_game_records(self):
+        """Return and clear structured episode summaries since last call."""
+        records = self._finished_records
+        self._finished_records = []
+        return records
 
     # ---- internal helpers ----
 

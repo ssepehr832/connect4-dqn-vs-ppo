@@ -17,94 +17,7 @@ import matplotlib.gridspec as gridspec
 import torch
 
 from envs.connect4 import Connect4Env, ROWS, COLS
-from opponents import RandomOpponent, HeuristicOpponent, MinimaxOpponent
-
-# Depth for NeuralMinimaxAgent — set by main() from --nm-depth
-_NM_DEPTH = 3
-
-
-def load_agent(agent_type):
-    if agent_type == "dqn":
-        from agents.dqn.agent import DQNAgent
-        agent = DQNAgent()
-        path = "models/dqn/latest.pt"
-        if not os.path.exists(path):
-            print(f"Error: No saved model at {path}. Train first.")
-            sys.exit(1)
-        agent.load(path)
-        agent.epsilon_start = 0.0
-        agent.epsilon_end = 0.0
-        agent.epsilon_start = 0.0
-        agent.epsilon_end = 0.0
-        return agent
-    elif agent_type == "ppo":
-        from agents.ppo.agent import PPOAgent
-        agent = PPOAgent()
-        path = "models/ppo/latest.pt"
-        if not os.path.exists(path):
-            print(f"Error: No saved model at {path}. Train first.")
-            sys.exit(1)
-        agent.load(path)
-        return agent
-    elif agent_type == "dqn-hybrid":
-        from agents.dqn.agent import DQNAgent
-        from agents.hybrid import HybridAgent
-        rl_agent = DQNAgent()
-        path = "models/dqn/latest.pt"
-        if not os.path.exists(path):
-            print(f"Error: No saved model at {path}. Train first.")
-            sys.exit(1)
-        rl_agent.load(path)
-        rl_agent.epsilon_start = 0.0
-        rl_agent.epsilon_end = 0.0
-        return HybridAgent(rl_agent)
-    elif agent_type == "ppo-hybrid":
-        from agents.ppo.agent import PPOAgent
-        from agents.hybrid import HybridAgent
-        rl_agent = PPOAgent()
-        path = "models/ppo/latest.pt"
-        if not os.path.exists(path):
-            print(f"Error: No saved model at {path}. Train first.")
-            sys.exit(1)
-        rl_agent.load(path)
-        return HybridAgent(rl_agent)
-    elif agent_type == "dqn-neural-minimax":
-        from agents.dqn.agent import DQNAgent
-        from agents.neural_minimax import NeuralMinimaxAgent
-        rl_agent = DQNAgent()
-        path = "models/dqn/latest.pt"
-        if not os.path.exists(path):
-            print(f"Error: No saved model at {path}. Train first.")
-            sys.exit(1)
-        rl_agent.load(path)
-        rl_agent.epsilon_start = 0.0
-        rl_agent.epsilon_end = 0.0
-        return NeuralMinimaxAgent(rl_agent, depth=_NM_DEPTH)
-    else:
-        print(f"Unknown agent type: {agent_type}")
-        sys.exit(1)
-
-
-def make_opponent(name, depth=4, agent=None):
-    if name == "random":
-        return RandomOpponent()
-    elif name == "heuristic":
-        return HeuristicOpponent()
-    elif name == "minimax":
-        return MinimaxOpponent(depth=depth)
-    elif name == "self":
-        if agent is None:
-            raise ValueError("Self-play requires an agent to copy")
-        from evaluation.evaluate import EvalSelfPlayOpponent
-        return EvalSelfPlayOpponent(agent, epsilon=0.05)
-    elif name == "hybrid":
-        from evaluation.evaluate import _AgentAsOpponent
-        return _AgentAsOpponent(load_agent("dqn-hybrid"))
-    elif name == "neural-minimax":
-        from evaluation.evaluate import _AgentAsOpponent
-        return _AgentAsOpponent(load_agent("dqn-neural-minimax"))
-    else:
-        raise ValueError(f"Unknown opponent: {name}")
+from evaluation.evaluate import load_agent, make_opponent
 
 
 def collect_game_data(agent, opponent, games=100):
@@ -167,13 +80,13 @@ def collect_game_data(agent, opponent, games=100):
             col = agent.select_action(env, greedy=True)
             record['agent_move_columns'].append(col)
             record['moves'].append(('agent', col))
-            _, reward, done, _ = env.step(col)
+            env.step(col)
 
-            if done:
-                if reward > 0:
-                    record['result'] = 'win'
-                elif reward == 0:
+            if env.done:
+                if env.winner == 0:
                     record['result'] = 'draw'
+                elif env.winner == agent_player:
+                    record['result'] = 'win'
                 else:
                     record['result'] = 'loss'
                 break
@@ -181,16 +94,15 @@ def collect_game_data(agent, opponent, games=100):
             # Opponent's turn
             col = opponent.select_action(env)
             record['moves'].append(('opponent', col))
-            _, reward, done, _ = env.step(col)
+            env.step(col)
 
-            if done:
-                if reward > 0:
-                    # Opponent won (reward is from opponent's perspective after step)
-                    record['result'] = 'loss'
-                elif reward == 0:
+            if env.done:
+                if env.winner == 0:
                     record['result'] = 'draw'
-                else:
+                elif env.winner == agent_player:
                     record['result'] = 'win'
+                else:
+                    record['result'] = 'loss'
                 break
 
         record['length'] = len(record['moves'])

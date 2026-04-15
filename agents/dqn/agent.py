@@ -58,6 +58,7 @@ class DQNAgent:
         self.n_step_buffer = NStepBuffer(n_envs, n_steps, gamma, self.replay_buffer)
 
         self.steps_done = 0
+        self.checkpoint_metadata = {}
 
     def set_freeze_conv(self, freeze):
         """Freeze or unfreeze conv layers and rebuild optimizer."""
@@ -206,8 +207,9 @@ class DQNAgent:
         if self.steps_done % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
 
-    def save(self, path):
+    def save(self, path, metadata=None):
         """Save model weights and training state (atomic write to prevent corruption)."""
+        self.checkpoint_metadata = metadata or {}
         import tempfile, os
         tmp_fd, tmp_path = tempfile.mkstemp(
             dir=os.path.dirname(path) or ".", suffix=".tmp"
@@ -220,6 +222,7 @@ class DQNAgent:
                     "target_net": self.target_net.state_dict(),
                     "optimizer": self.optimizer.state_dict(),
                     "steps_done": self.steps_done,
+                    "metadata": self.checkpoint_metadata,
                 },
                 tmp_path,
             )
@@ -231,12 +234,17 @@ class DQNAgent:
 
     def load(self, path):
         """Load model weights and training state."""
-        ckpt = torch.load(path, map_location=self.device, weights_only=True)
+        try:
+            ckpt = torch.load(path, map_location=self.device, weights_only=True)
+        except TypeError:
+            ckpt = torch.load(path, map_location=self.device)
         self.q_net.load_state_dict(ckpt["q_net"])
         self.target_net.load_state_dict(ckpt["target_net"])
         self.steps_done = ckpt["steps_done"]
+        self.checkpoint_metadata = ckpt.get("metadata", {})
         # Only load optimizer state if param groups match (skip if conv is frozen)
         try:
             self.optimizer.load_state_dict(ckpt["optimizer"])
         except (ValueError, KeyError):
             pass  # optimizer shape mismatch (e.g. freeze_conv changed param count)
+        return self.checkpoint_metadata

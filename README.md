@@ -141,6 +141,42 @@ python -m training.train_dqn --opponent self-mixed --episodes 50000 --freeze-con
 python -m evaluation.evaluate --agent dqn-hybrid --opponent all
 ```
 
+### Overnight Curriculum Runner
+
+For the final project report workflow, use the unattended curriculum runner instead of invoking each stage by hand. It:
+- auto-downloads the solved dataset if needed
+- runs pretraining plus all four RL stages
+- saves versioned checkpoints and a `latest.pt` alias inside the run directory
+- logs `pretrain_metrics.csv`, `training_metrics.csv`, and `evaluation_summary.csv`
+- promotes the best checkpoint based on hybrid win rate vs minimax depth 6
+- generates report-ready plots under `artifacts/runs/dqn/<run-name>/plots/`
+
+Example:
+
+```bash
+python -m training.run_curriculum \
+  --run-name overnight-apr15 \
+  --n-envs 128 \
+  --checkpoint-every 1000 \
+  --quick-games 48 \
+  --full-games 200
+```
+
+Artifacts are written to:
+
+```text
+artifacts/runs/dqn/<run-name>/
+├── checkpoints/
+├── config.json
+├── manifest.json
+├── pretrain_metrics.csv
+├── pretrain_summary.json
+├── training_metrics.csv
+├── evaluation_summary.csv
+├── plots/
+└── run_summary.md
+```
+
 ### Quick Start — PPO (Fresh Training)
 
 ```bash
@@ -164,6 +200,22 @@ python -m training.train_ppo --opponent self --episodes 50000
 --lr 1e-4                # Learning rate
 --entropy-coef 0.05      # Exploration bonus (PPO)
 --seed 42                # Random seed
+```
+
+### Evaluation Flags
+
+`evaluation.evaluate` now supports structured artifact logging:
+
+```bash
+python -m evaluation.evaluate \
+  --agent dqn-hybrid \
+  --model-path artifacts/runs/dqn/overnight-apr15/checkpoints/best.pt \
+  --hybrid-depth 4 \
+  --opponent minimax \
+  --depth 6 \
+  --games 200 \
+  --save-csv artifacts/runs/dqn/overnight-apr15/evaluation_summary.csv \
+  --eval-tier manual
 ```
 
 ### Evaluation

@@ -27,3 +27,7 @@ results/*.pt
 
 # Model checkpoints
 models/
+
+# Virtual environment
+venv/
+artifacts/

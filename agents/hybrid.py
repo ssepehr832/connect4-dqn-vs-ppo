@@ -15,7 +15,7 @@ class HybridAgent:
         5. If ALL moves lose → play the least-bad one (minimax's best)
     """
 
-    def __init__(self, rl_agent, minimax_depth=5):
+    def __init__(self, rl_agent, minimax_depth=4):
         self.rl_agent = rl_agent
         self.minimax = MinimaxOpponent(depth=minimax_depth)
 

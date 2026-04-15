@@ -90,52 +90,40 @@ def make_opponent(name, model_path=None):
         return opp.select_action, "Minimax (depth 4)"
 
     elif name == "dqn":
-        from agents.dqn.agent import DQNAgent
-        agent = DQNAgent()
-        path = model_path or _find_model("dqn")
-        if path is None:
-            print("Error: No DQN model found. Train one first with training/train_dqn.py")
-            sys.exit(1)
-        agent.load(path)
-        print(f"  Loaded DQN model from {path}")
-        return lambda env: agent.select_action(env, greedy=True), f"DQN ({os.path.basename(path)})"
-
-    elif name == "ppo":
-        from agents.ppo.agent import PPOAgent
-        agent = PPOAgent()
-        path = model_path or _find_model("ppo")
-        if path is None:
-            print("Error: No PPO model found. Train one first with training/train_ppo.py")
-            sys.exit(1)
-        agent.load(path)
-        print(f"  Loaded PPO model from {path}")
-        return lambda env: agent.select_action(env, greedy=True), f"PPO ({os.path.basename(path)})"
-
-    elif name == "dqn-hybrid":
-        from agents.dqn.agent import DQNAgent
-        from agents.hybrid import HybridAgent
-        rl_agent = DQNAgent()
         path = model_path or _find_model("dqn")
         if path is None:
             print("Error: No DQN model found. Train one first.")
             sys.exit(1)
-        rl_agent.load(path)
-        hybrid = HybridAgent(rl_agent)
-        print(f"  Loaded DQN-Hybrid from {path}")
-        return lambda env: hybrid.select_action(env, greedy=True), f"DQN-Hybrid ({os.path.basename(path)})"
+        agent = load_agent("dqn", model_path=path)
+        print(f"  Loaded DQN model from {path}")
+        return lambda env: agent.select_action(env, greedy=True), f"DQN ({os.path.basename(path)})"
 
-    elif name == "ppo-hybrid":
-        from agents.ppo.agent import PPOAgent
-        from agents.hybrid import HybridAgent
-        rl_agent = PPOAgent()
+    elif name == "ppo":
         path = model_path or _find_model("ppo")
         if path is None:
             print("Error: No PPO model found. Train one first.")
             sys.exit(1)
-        rl_agent.load(path)
-        hybrid = HybridAgent(rl_agent)
+        agent = load_agent("ppo", model_path=path)
+        print(f"  Loaded PPO model from {path}")
+        return lambda env: agent.select_action(env, greedy=True), f"PPO ({os.path.basename(path)})"
+
+    elif name == "dqn-hybrid":
+        path = model_path or _find_model("dqn")
+        if path is None:
+            print("Error: No DQN model found. Train one first.")
+            sys.exit(1)
+        agent = load_agent("dqn-hybrid", model_path=path)
+        print(f"  Loaded DQN-Hybrid from {path}")
+        return lambda env: agent.select_action(env, greedy=True), f"DQN-Hybrid ({os.path.basename(path)})"
+
+    elif name == "ppo-hybrid":
+        path = model_path or _find_model("ppo")
+        if path is None:
+            print("Error: No PPO model found. Train one first.")
+            sys.exit(1)
+        agent = load_agent("ppo-hybrid", model_path=path)
         print(f"  Loaded PPO-Hybrid from {path}")
-        return lambda env: hybrid.select_action(env, greedy=True), f"PPO-Hybrid ({os.path.basename(path)})"
+        return lambda env: agent.select_action(env, greedy=True), f"PPO-Hybrid ({os.path.basename(path)})"
 
     else:
         print(f"Unknown player type: {name}")

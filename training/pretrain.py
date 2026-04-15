@@ -12,9 +12,13 @@ Usage:
 """
 
 import argparse
+import io
 import os
+import subprocess
 import sys
 import time
+import urllib.request
+import zipfile
 import numpy as np
 import torch
 import torch.nn as nn
@@ -23,11 +27,53 @@ from torch.utils.data import Dataset, DataLoader
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from training.artifacts import append_csv_row, ensure_dir, now_iso, write_json
+
 
 DATA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data", "connect-4.data"
 )
+UCI_ZIP_URL = "https://archive.ics.uci.edu/static/public/26/connect%2B4.zip"
+
+
+def ensure_dataset(path=DATA_PATH):
+    """Ensure the Tromp/UCI dataset exists locally."""
+    if os.path.exists(path):
+        return path
+
+    data_dir = os.path.dirname(path)
+    ensure_dir(data_dir)
+
+    print(f"Dataset missing at {path}; downloading from UCI...")
+    with urllib.request.urlopen(UCI_ZIP_URL, timeout=60) as resp:
+        payload = resp.read()
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        compressed_name = "connect-4.data.Z"
+        if compressed_name not in archive.namelist():
+            raise RuntimeError(
+                f"UCI archive did not contain {compressed_name}; found {archive.namelist()}"
+            )
+        compressed_path = os.path.join(data_dir, compressed_name)
+        archive.extract(compressed_name, data_dir)
+
+    # macOS/Linux gunzip can transparently decode historical .Z files.
+    last_error = None
+    for cmd in (["gunzip", "-c", compressed_path], ["gzip", "-dc", compressed_path]):
+        try:
+            with open(path, "wb") as handle:
+                subprocess.run(cmd, check=True, stdout=handle, stderr=subprocess.PIPE)
+            os.remove(compressed_path)
+            print(f"Saved dataset to {path}")
+            return path
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            last_error = exc
+
+    raise RuntimeError(
+        "Failed to decompress connect-4.data.Z after download. "
+        "Please ensure gunzip or gzip is installed."
+    ) from last_error
 
 
 class Connect4Dataset(Dataset):
@@ -38,6 +84,7 @@ class Connect4Dataset(Dataset):
     """
 
     def __init__(self, path=DATA_PATH):
+        path = ensure_dataset(path)
         states = []
         labels = []
         label_map = {"loss": 0, "draw": 1, "win": 2}
@@ -119,27 +166,41 @@ def get_conv_backbone(agent_type):
         raise ValueError(f"Unknown agent type: {agent_type}")
 
 
-def transfer_weights(agent_type, pretrained_conv, save_dir):
+def transfer_weights(agent_type, pretrained_conv, save_path=None, save_dir=None):
     """Transfer pretrained conv weights to the agent and save."""
+    if save_path is None:
+        if save_dir is None:
+            save_dir = f"models/{agent_type}"
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, "latest.pt")
+
     if agent_type == "dqn":
         from agents.dqn.agent import DQNAgent
         agent = DQNAgent()
         # Load pretrained conv weights into both q_net and target_net
         agent.q_net.conv.load_state_dict(pretrained_conv.state_dict())
         agent.target_net.conv.load_state_dict(pretrained_conv.state_dict())
-        path = os.path.join(save_dir, "latest.pt")
-        agent.save(path)
-        print(f"Transferred conv weights to DQN, saved to {path}")
+        agent.save(save_path)
+        print(f"Transferred conv weights to DQN, saved to {save_path}")
     elif agent_type == "ppo":
         from agents.ppo.agent import PPOAgent
         agent = PPOAgent()
         agent.network.conv.load_state_dict(pretrained_conv.state_dict())
-        path = os.path.join(save_dir, "latest.pt")
-        agent.save(path)
-        print(f"Transferred conv weights to PPO, saved to {path}")
+        agent.save(save_path)
+        print(f"Transferred conv weights to PPO, saved to {save_path}")
 
 
-def train(agent_type, epochs=50, batch_size=256, lr=1e-3, device=None):
+def train(
+    agent_type,
+    epochs=50,
+    batch_size=256,
+    lr=1e-3,
+    device=None,
+    data_path=DATA_PATH,
+    metrics_path=None,
+    summary_path=None,
+    save_path=None,
+):
     if device is None:
         if torch.cuda.is_available():
             device = torch.device("cuda")
@@ -150,7 +211,7 @@ def train(agent_type, epochs=50, batch_size=256, lr=1e-3, device=None):
     print(f"Device: {device}")
 
     # Load dataset
-    dataset = Connect4Dataset()
+    dataset = Connect4Dataset(path=data_path)
     n_total = len(dataset)
     n_val = int(0.1 * n_total)
     n_train = n_total - n_val
@@ -225,6 +286,20 @@ def train(agent_type, epochs=50, batch_size=256, lr=1e-3, device=None):
 
         print(f"{epoch:>5d} | {train_loss:>10.4f} | {train_acc:>8.1%} | {val_acc:>8.1%} | {elapsed:>4.1f}s")
 
+        if metrics_path:
+            append_csv_row(metrics_path, {
+                "timestamp": now_iso(),
+                "agent": agent_type,
+                "epoch": epoch,
+                "train_loss": round(train_loss, 6),
+                "train_acc": round(train_acc, 6),
+                "val_acc": round(val_acc, 6),
+                "lr": round(float(optimizer.param_groups[0]["lr"]), 10),
+                "epoch_seconds": round(elapsed, 3),
+                "device": str(device),
+                "dataset_path": os.path.abspath(data_path),
+            })
+
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_conv_state = {k: v.cpu().clone() for k, v in conv.state_dict().items()}
@@ -235,9 +310,27 @@ def train(agent_type, epochs=50, batch_size=256, lr=1e-3, device=None):
 
     # Transfer best conv weights to agent
     conv.load_state_dict(best_conv_state)
-    save_dir = f"models/{agent_type}"
-    os.makedirs(save_dir, exist_ok=True)
-    transfer_weights(agent_type, conv, save_dir)
+    default_save_dir = f"models/{agent_type}"
+    os.makedirs(default_save_dir, exist_ok=True)
+    if save_path is None:
+        save_path = os.path.join(default_save_dir, "latest.pt")
+    transfer_weights(agent_type, conv, save_path=save_path)
+
+    if summary_path:
+        write_json(summary_path, {
+            "timestamp": now_iso(),
+            "agent": agent_type,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "lr": lr,
+            "device": str(device),
+            "dataset_path": os.path.abspath(data_path),
+            "save_path": os.path.abspath(save_path),
+            "best_val_acc": best_val_acc,
+            "n_total": n_total,
+            "n_train": n_train,
+            "n_val": n_val,
+        })
 
     return best_val_acc
 
@@ -248,9 +341,22 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--data-path", type=str, default=DATA_PATH)
+    parser.add_argument("--metrics-path", type=str, default=None)
+    parser.add_argument("--summary-path", type=str, default=None)
+    parser.add_argument("--save-path", type=str, default=None)
     args = parser.parse_args()
 
-    train(args.agent, epochs=args.epochs, batch_size=args.batch_size, lr=args.lr)
+    train(
+        args.agent,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        data_path=args.data_path,
+        metrics_path=args.metrics_path,
+        summary_path=args.summary_path,
+        save_path=args.save_path,
+    )
 
 
 if __name__ == "__main__":
