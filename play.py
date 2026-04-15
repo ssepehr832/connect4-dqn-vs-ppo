@@ -114,7 +114,7 @@ def make_opponent(name, model_path=None):
 
 
 def _find_model(prefix):
-    """Auto-detect a saved model in models/<prefix>/ (or fall back to results/)."""
+    """Auto-detect a saved model in models/<prefix>/."""
     base = os.path.dirname(os.path.abspath(__file__))
 
     # First: check models/<prefix>/latest.pt
@@ -129,17 +129,6 @@ def _find_model(prefix):
             os.path.join(model_dir, f)
             for f in os.listdir(model_dir)
             if f.endswith(".pt")
-        ]
-        if candidates:
-            return max(candidates, key=os.path.getmtime)
-
-    # Fallback: legacy results/ directory
-    results_dir = os.path.join(base, "results")
-    if os.path.isdir(results_dir):
-        candidates = [
-            os.path.join(results_dir, f)
-            for f in os.listdir(results_dir)
-            if f.startswith(prefix) and f.endswith(".pt")
         ]
         if candidates:
             return max(candidates, key=os.path.getmtime)
