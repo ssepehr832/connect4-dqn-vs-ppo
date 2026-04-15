@@ -338,7 +338,7 @@ def visualize_opponent(agent, agent_name, opp_name, games, depth, save_path=None
 def main():
     parser = argparse.ArgumentParser(description="Visualize agent play style")
     parser.add_argument("--agent", default="dqn",
-                        choices=["dqn", "ppo", "dqn-hybrid", "ppo-hybrid", "dqn-neural-minimax"])
+                        choices=["dqn", "dqn-hybrid", "dqn-neural-minimax"])
     parser.add_argument("--opponent", default="all",
                         choices=["all", "random", "heuristic", "minimax", "hybrid", "neural-minimax"])
     parser.add_argument("--games", type=int, default=100)

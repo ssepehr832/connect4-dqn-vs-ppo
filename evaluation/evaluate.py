@@ -21,8 +21,6 @@ def default_model_path(agent_type):
     """Resolve the default model path for an agent family."""
     if agent_type.startswith("dqn"):
         return "models/dqn/latest.pt"
-    if agent_type.startswith("ppo"):
-        return "models/ppo/latest.pt"
     raise ValueError(f"Unknown agent type: {agent_type}")
 
 
@@ -42,13 +40,6 @@ def load_agent(agent_type, model_path=None, hybrid_depth=4):
         agent.epsilon_end = 0.0
         return agent
 
-    if agent_type == "ppo":
-        from agents.ppo.agent import PPOAgent
-
-        agent = PPOAgent()
-        agent.load(path)
-        return agent
-
     if agent_type == "dqn-hybrid":
         from agents.dqn.agent import DQNAgent
 
@@ -56,13 +47,6 @@ def load_agent(agent_type, model_path=None, hybrid_depth=4):
         rl_agent.load(path)
         rl_agent.epsilon_start = 0.0
         rl_agent.epsilon_end = 0.0
-        return HybridAgent(rl_agent, minimax_depth=hybrid_depth)
-
-    if agent_type == "ppo-hybrid":
-        from agents.ppo.agent import PPOAgent
-
-        rl_agent = PPOAgent()
-        rl_agent.load(path)
         return HybridAgent(rl_agent, minimax_depth=hybrid_depth)
 
     if agent_type == "dqn-neural-minimax":
@@ -310,9 +294,9 @@ def print_results(row):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a trained agent")
     parser.add_argument("--agent", required=True,
-                        choices=["dqn", "ppo", "dqn-hybrid", "ppo-hybrid", "dqn-neural-minimax"])
+                        choices=["dqn", "dqn-hybrid", "dqn-neural-minimax"])
     parser.add_argument("--opponent", default="all",
-                        choices=["all", "random", "heuristic", "minimax", "hybrid", "neural-minimax"])
+                        choices=["all", "random", "heuristic", "minimax", "hybrid", "neural-minimax", "self"])
     parser.add_argument("--games", type=int, default=100,
                         help="Games per opponent (default: 100)")
     parser.add_argument("--depth", type=int, default=4,

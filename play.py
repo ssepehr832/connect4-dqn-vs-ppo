@@ -98,15 +98,6 @@ def make_opponent(name, model_path=None):
         print(f"  Loaded DQN model from {path}")
         return lambda env: agent.select_action(env, greedy=True), f"DQN ({os.path.basename(path)})"
 
-    elif name == "ppo":
-        path = model_path or _find_model("ppo")
-        if path is None:
-            print("Error: No PPO model found. Train one first.")
-            sys.exit(1)
-        agent = load_agent("ppo", model_path=path)
-        print(f"  Loaded PPO model from {path}")
-        return lambda env: agent.select_action(env, greedy=True), f"PPO ({os.path.basename(path)})"
-
     elif name == "dqn-hybrid":
         path = model_path or _find_model("dqn")
         if path is None:
@@ -116,18 +107,9 @@ def make_opponent(name, model_path=None):
         print(f"  Loaded DQN-Hybrid from {path}")
         return lambda env: agent.select_action(env, greedy=True), f"DQN-Hybrid ({os.path.basename(path)})"
 
-    elif name == "ppo-hybrid":
-        path = model_path or _find_model("ppo")
-        if path is None:
-            print("Error: No PPO model found. Train one first.")
-            sys.exit(1)
-        agent = load_agent("ppo-hybrid", model_path=path)
-        print(f"  Loaded PPO-Hybrid from {path}")
-        return lambda env: agent.select_action(env, greedy=True), f"PPO-Hybrid ({os.path.basename(path)})"
-
     else:
         print(f"Unknown player type: {name}")
-        print("Choose from: human, random, heuristic, minimax, dqn, ppo, dqn-hybrid, ppo-hybrid")
+        print("Choose from: human, random, heuristic, minimax, dqn, dqn-hybrid")
         sys.exit(1)
 
 
@@ -217,7 +199,6 @@ Player types:
   heuristic   Rule-based: win/block/center
   minimax     Alpha-beta search (depth 4)
   dqn         Trained DQN agent
-  ppo         Trained PPO agent
 
 Examples:
   python play.py                          # You vs Heuristic

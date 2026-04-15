@@ -1,10 +1,10 @@
 # connect4-dqn-vs-ppo
 
-Empirical comparison of **DQN** and **PPO** for learning Connect 4 through self-play against progressively stronger opponents.
+Empirical comparison of **DQN** for learning Connect 4 through self-play against progressively stronger opponents.
 
 ## Overview
 
-Connect 4 is a two-player, zero-sum game with sparse terminal rewards, making it a challenging testbed for deep reinforcement learning. This project compares two foundational RL algorithms — a value-based method (DQN) and a policy-gradient method (PPO) — across multiple dimensions: **win rate**, **sample efficiency**, and **training stability**.
+Connect 4 is a two-player, zero-sum game with sparse terminal rewards, making it a challenging testbed for deep reinforcement learning. This project uses a foundational RL algorithm — a value-based method (DQN) — to measure **win rate**, **sample efficiency**, and **training stability**.
 
 To prevent agents from overfitting to a single opponent strategy, we train against increasingly difficult opponents:
 
@@ -21,25 +21,21 @@ To prevent agents from overfitting to a single opponent strategy, we train again
 ### DQN (Deep Q-Network)
 Off-policy, value-based learning with experience replay and a target network. Uses 3-step returns for faster reward propagation. The agent learns Q-values for each column and selects the action with the highest estimated return.
 
-### PPO (Proximal Policy Optimization)
-On-policy, actor-critic method with clipped surrogate objectives and GAE. Directly optimizes a stochastic policy while maintaining training stability through conservative updates.
-
 ### Hybrid (RL + Minimax)
 Combines learned strategy with exact endgame solving. Minimax evaluates the position:
 - **Forced win detected** — play the winning move
 - **Some moves lose, others safe** — filter out losing moves, let RL choose among safe ones
 - **Position unsolved** — defer entirely to the RL agent's policy
 
-Available as `dqn-hybrid` and `ppo-hybrid`.
+Available as `dqn-hybrid`.
 
 ### Supervised Pretraining
 Conv layers are pretrained on the John Tromp solved Connect 4 dataset (~67k positions at 8 pieces, labeled win/loss/draw). This gives the network strong spatial features before RL training begins. During RL fine-tuning, conv layers are frozen (`--freeze-conv`) so only the FC head adapts — preserving the ground-truth features learned from solved data.
 
 ### Network Architecture
-Both agents share the same CNN backbone:
 - 5 convolutional layers (256 filters each, 3x3, padding=1) on a 6x7x2 input (one channel per player)
 - Fully connected head: 1024 → 512 → 256 → output
-- DQN outputs 7 Q-values; PPO outputs a policy distribution + value estimate
+- DQN outputs 7 Q-values
 
 ### Reward Shaping
 - **Win:** +1.0 with a speed bonus of up to +0.3 for faster wins
@@ -48,7 +44,7 @@ Both agents share the same CNN backbone:
 
 ## Performance Optimizations
 
-- **Vectorized environments** — N games run in parallel (configurable via `--n-envs`, default 16 for DQN, 64 for PPO)
+- **Vectorized environments** — N games run in parallel (configurable via `--n-envs`, default 16 for DQN)
 - **C minimax engine** — alpha-beta pruning implemented in C, auto-compiled on first use
 - **Parallel minimax with pthreads** — all N opponent minimax calls batched into one parallel C call
 - **Batched self-play** — opponent forward passes batched on GPU instead of one-by-one
@@ -72,7 +68,6 @@ Both agents share the same CNN backbone:
 │   └── vec_connect4.py          # Vectorized N-game parallel environment
 ├── agents/
 │   ├── dqn/                     # DQN (Q-network, 3-step replay buffer, agent)
-│   ├── ppo/                     # PPO (actor-critic network, rollout buffer, agent)
 │   └── hybrid.py                # Hybrid agent (minimax + RL)
 ├── opponents/
 │   ├── random_opponent.py
@@ -82,7 +77,6 @@ Both agents share the same CNN backbone:
 │   └── self_play_opponent.py
 ├── training/
 │   ├── train_dqn.py             # DQN training loop
-│   ├── train_ppo.py             # PPO training loop
 │   └── pretrain.py              # Supervised pretraining from solved dataset
 ├── evaluation/
 │   ├── evaluate.py              # Parallel evaluation against opponents
@@ -90,8 +84,7 @@ Both agents share the same CNN backbone:
 ├── data/
 │   └── connect-4.data           # John Tromp solved positions dataset
 ├── models/
-│   ├── dqn/latest.pt
-│   └── ppo/latest.pt
+│   └── dqn/latest.pt
 ├── play.py                      # Interactive play (human or agent vs anything)
 ├── build.sh                     # Manual C compilation script
 └── README.md
@@ -177,15 +170,6 @@ artifacts/runs/dqn/<run-name>/
 └── run_summary.md
 ```
 
-### Quick Start — PPO (Fresh Training)
-
-```bash
-python -m training.train_ppo --opponent random --episodes 5000
-python -m training.train_ppo --opponent heuristic --episodes 10000
-python -m training.train_ppo --opponent minimax --episodes 20000
-python -m training.train_ppo --opponent self --episodes 50000
-```
-
 ### Training Flags
 ```
 --fresh                  # Start from scratch (ignore latest.pt)
@@ -198,7 +182,6 @@ python -m training.train_ppo --opponent self --episodes 50000
 --eps-end 0.05           # Minimum epsilon (DQN)
 --eps-decay 80000        # Epsilon decay steps (DQN)
 --lr 1e-4                # Learning rate
---entropy-coef 0.05      # Exploration bonus (PPO)
 --seed 42                # Random seed
 ```
 
@@ -223,7 +206,6 @@ python -m evaluation.evaluate \
 ```bash
 python -m evaluation.evaluate --agent dqn --opponent all
 python -m evaluation.evaluate --agent dqn-hybrid --opponent all
-python -m evaluation.evaluate --agent ppo --opponent minimax --games 200 --depth 6
 ```
 
 ### Visualization
@@ -241,19 +223,16 @@ python play.py                            # You vs Heuristic (default)
 python play.py -p2 dqn                    # You vs DQN
 python play.py -p2 dqn-hybrid             # You vs DQN-Hybrid
 python play.py -p2 minimax                # You vs Minimax
-python play.py -p1 dqn -p2 ppo           # Watch DQN vs PPO
-python play.py -p1 dqn-hybrid -p2 ppo-hybrid -n 10 --swap  # 10 games, alternate sides
 ```
 
 ## References
 
 1. Mnih, V., et al. (2015). *Human-level control through deep reinforcement learning.* Nature, 518(7540), 529-533.
-2. Schulman, J., et al. (2017). *Proximal Policy Optimization Algorithms.* arXiv:1707.06347.
-3. Mnih, V., et al. (2016). *Asynchronous methods for deep reinforcement learning.* ICML.
-4. van Hasselt, H., Guez, A., & Silver, D. (2016). *Deep reinforcement learning with double Q-learning.* AAAI.
-5. Shah, S., & Gupta, S. (2022). *Reinforcement Learning for ConnectX.* arXiv:2210.08263.
-6. Knuth, D. E., & Moore, R. W. (1975). *An Analysis of Alpha-Beta Pruning.* Artificial Intelligence, 6(4), 293-326.
-7. Tromp, J. (2008). *John's Connect Four Playground.* https://tromp.github.io/c4/c4.html
+2. Mnih, V., et al. (2016). *Asynchronous methods for deep reinforcement learning.* ICML.
+3. van Hasselt, H., Guez, A., & Silver, D. (2016). *Deep reinforcement learning with double Q-learning.* AAAI.
+4. Shah, S., & Gupta, S. (2022). *Reinforcement Learning for ConnectX.* arXiv:2210.08263.
+5. Knuth, D. E., & Moore, R. W. (1975). *An Analysis of Alpha-Beta Pruning.* Artificial Intelligence, 6(4), 293-326.
+6. Tromp, J. (2008). *John's Connect Four Playground.* https://tromp.github.io/c4/c4.html
 
 ## License
 

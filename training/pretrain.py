@@ -1,14 +1,13 @@
 """Supervised pretraining on the Tromp Connect 4 dataset.
 
 Trains the conv backbone to classify positions as win/loss/draw,
-then transfers those features to the DQN/PPO networks for RL fine-tuning.
+then transfers those features to the DQN network for RL fine-tuning.
 
 Dataset: 67,557 board positions at 8-ply, labeled {win, loss, draw}
          from the perspective of the player to move (player x).
 
 Usage:
     python -m training.pretrain --agent dqn --epochs 50
-    python -m training.pretrain --agent ppo --epochs 50
 """
 
 import argparse
@@ -133,7 +132,7 @@ class Connect4Dataset(Dataset):
 class PretrainNet(nn.Module):
     """Conv backbone + classification head for position evaluation.
 
-    Uses the same conv architecture as the DQN/PPO networks so weights
+    Uses the same conv architecture as the DQN network so weights
     can be directly transferred.
     """
 
@@ -158,10 +157,6 @@ def get_conv_backbone(agent_type):
         from agents.dqn.network import QNetwork
         net = QNetwork()
         return net.conv
-    elif agent_type == "ppo":
-        from agents.ppo.network import ActorCriticNetwork
-        net = ActorCriticNetwork()
-        return net.conv
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
 
@@ -182,12 +177,6 @@ def transfer_weights(agent_type, pretrained_conv, save_path=None, save_dir=None)
         agent.target_net.conv.load_state_dict(pretrained_conv.state_dict())
         agent.save(save_path)
         print(f"Transferred conv weights to DQN, saved to {save_path}")
-    elif agent_type == "ppo":
-        from agents.ppo.agent import PPOAgent
-        agent = PPOAgent()
-        agent.network.conv.load_state_dict(pretrained_conv.state_dict())
-        agent.save(save_path)
-        print(f"Transferred conv weights to PPO, saved to {save_path}")
 
 
 def train(
@@ -337,7 +326,7 @@ def train(
 
 def main():
     parser = argparse.ArgumentParser(description="Supervised pretraining on Connect 4 dataset")
-    parser.add_argument("--agent", default="dqn", choices=["dqn", "ppo"])
+    parser.add_argument("--agent", default="dqn", choices=["dqn"])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)

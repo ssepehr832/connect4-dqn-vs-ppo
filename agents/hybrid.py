@@ -5,7 +5,7 @@ from opponents.minimax_opponent import MinimaxOpponent
 
 
 class HybridAgent:
-    """Wraps a DQN or PPO agent with minimax safety filtering.
+    """Wraps a DQN agent with minimax safety filtering.
 
     Logic:
         1. Run minimax at given depth to get per-column scores
