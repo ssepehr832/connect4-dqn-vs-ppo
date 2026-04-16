@@ -85,13 +85,13 @@ def _save_fig(path: str) -> None:
     plt.close()
 
 
-def plot_minimax_depth_sweep(rows: list[dict], labels: list[str], out_path: str) -> None:
+def plot_minimax_depth_sweep(
+    rows: list[dict], labels: list[str], out_path: str
+) -> None:
     import matplotlib.pyplot as plt
 
     idx = index_rows(rows)
-    depths_avail = sorted(
-        {d for (_, o, d) in idx if o == "minimax" and d is not None}
-    )
+    depths_avail = sorted({d for (_, o, d) in idx if o == "minimax" and d is not None})
     if not depths_avail:
         return
 
@@ -239,7 +239,11 @@ def plot_heatmap(rows: list[dict], labels: list[str], out_path: str) -> None:
 
     idx = index_rows(rows)
     col_specs: list[tuple[str, int | None, str]] = []
-    for opp, title in [("random", "random"), ("heuristic", "heuristic"), ("self", "self")]:
+    for opp, title in [
+        ("random", "random"),
+        ("heuristic", "heuristic"),
+        ("self", "self"),
+    ]:
         col_specs.append((opp, None, title))
     for d in sorted({d for (_, o, d) in idx if o == "minimax" and d is not None}):
         col_specs.append(("minimax", d, f"mm d{d}"))
@@ -254,7 +258,9 @@ def plot_heatmap(rows: list[dict], labels: list[str], out_path: str) -> None:
             if r:
                 mat[i, j] = _f(r, "win_rate")
 
-    fig, ax = plt.subplots(figsize=(max(8, len(col_specs) * 0.9), max(5, len(labels) * 0.45)))
+    fig, ax = plt.subplots(
+        figsize=(max(8, len(col_specs) * 0.9), max(5, len(labels) * 0.45))
+    )
     im = ax.imshow(mat, aspect="auto", vmin=0, vmax=1, cmap="RdYlGn")
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels, fontsize=9)
@@ -266,8 +272,12 @@ def plot_heatmap(rows: list[dict], labels: list[str], out_path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Plot project report eval CSV (one PNG per figure).")
-    parser.add_argument("--csv", default=_default_csv_path(), help="Path to project_report_evals.csv")
+    parser = argparse.ArgumentParser(
+        description="Plot project report eval CSV (one PNG per figure)."
+    )
+    parser.add_argument(
+        "--csv", default=_default_csv_path(), help="Path to project_report_evals.csv"
+    )
     parser.add_argument(
         "--out-dir",
         default="",
@@ -295,14 +305,18 @@ def main() -> None:
         print(f"CSV not found: {args.csv}", file=sys.stderr)
         sys.exit(1)
 
-    out_dir = args.out_dir or os.path.join(os.path.dirname(os.path.abspath(args.csv)), "project_report_plots")
+    out_dir = args.out_dir or os.path.join(
+        os.path.dirname(os.path.abspath(args.csv)), "project_report_plots"
+    )
     os.makedirs(out_dir, exist_ok=True)
 
     rows = load_rows(args.csv)
     preferred = _checkpoint_order()
     labels = ordered_labels(rows, preferred)
 
-    plot_minimax_depth_sweep(rows, labels, os.path.join(out_dir, "minimax_depth_sweep.png"))
+    plot_minimax_depth_sweep(
+        rows, labels, os.path.join(out_dir, "minimax_depth_sweep.png")
+    )
     plot_opponents_grouped_by_checkpoint(
         rows,
         labels,
